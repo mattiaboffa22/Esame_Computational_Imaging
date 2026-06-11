@@ -39,7 +39,7 @@ class MayoDataset(Dataset):
 
 
 class MyTrainer():
-    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, validation_set=None):
+    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, validation_set=None, test_set=None):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model = model
         model.to(self.device)
@@ -49,12 +49,11 @@ class MyTrainer():
         self.loss_fn = loss_fn
         self.num_epochs = num_epochs
         self.saveModel = saveModel
-        self.testSet = next(iter(self.train_loader))
+        self.testSet = test_set
         self.validation_set = validation_set
 
-    def evaluate(self, sample, grad = False): #⚠️⚠️⚠️⚠️ TO DO!!
-        # grad=False indica che non vogliamo calcolare i gradienti durante la valutazione. Questo è particolarmente utile durante la fase di test o validazione, dove non è necessario aggiornare i pesi del modello.
-        x, y = sample # (x, y): x = grandTruth, y = LowResolution
+    def evaluate(self, samples, grad = False):
+        x, y = samples # (x, y): x = grandTruth, y = LowResolution
         x = x.to(self.device)
         y = y.to(self.device)
         
@@ -67,50 +66,38 @@ class MyTrainer():
         loss = self.loss_fn(x_pred, x) 
         return loss, y, x_pred
 
-    def test(self, evalMetrich = None): #⚠️⚠️⚠️⚠️ TO DO!!
-        print('⚠️: Testing...', end='\r')
-        x = self.testSet
+    def test(self, evalMetrich = None): 
+        print(f'⚠️: Testing=> {evalMetrich.__name__ if evalMetrich else "Loss"}')
+                        
+        evaluation = 0.0
 
-        loss, y, x_pred = self.evaluate(x)
+        loss , y_vis, x_pred_vis = self.evaluate(self.testSet, grad=False)
+        # Loss, Lr, ModelPredict 
+        # Evaluate the metric for the current sample
 
-        print()
-
-        # Per visualizzare le immagini, prendiamo solo il primo esempio del batch e lo portiamo alla CPU
-        x_vis = x[0][0].cpu()
-        y_vis = y[0].cpu()
-        x_pred_vis = x_pred[0].cpu()
+        #print(f' ⚠️ Loss: {loss.item():.4f}, y: {y_vis.shape}, x_pred: {x_pred_vis.shape}')
+        # Loss: 0.0702, y: torch.Size([32, 1, 256, 256]), x_pred: torch.Size([32, 1, 256, 256])
 
         if evalMetrich is not None:
-            print(f'⚠️: Evaluating {evalMetrich.__name__}...', end='\r')
-            # La metrica LPIPS utilizza tensori, mentre le altre metriche come PSNR e SSIM utilizzano array numpy. Quindi, se la metrica è LPIPS, manteniamo i tensori, altrimenti li convertiamo in numpy array.
-            if not evalMetrich.__name__ == 'lpips':
+            #For each sample in the test set, compute the evaluation metric and average it over the entire test set.
+            for i in range(len(self.testSet[0])):
 
-                x_pred = x_pred.cpu().numpy()
-                x = x.cpu().numpy()
+                x = self.testSet[0][i].cpu().numpy()
+                x_pred_sample = x_pred_vis[i].cpu().numpy()
 
-            if evalMetrich.__name__ == 'structural_similarity':
-                # Squeeze to (H, W) for grayscale images
-                x_metric = x.squeeze()
-                x_pred_metric = x_pred.squeeze()
-                metric_value = evalMetrich(x_metric, x_pred_metric, data_range=1.0)
-            else:
-                metric_value = evalMetrich(x, x_pred, data_range=1.0) #Assumendo che i valori dei pixel siano normalizzati tra 0 e 1, il data_range è impostato a 1.0. Se i valori dei pixel fossero in un intervallo diverso, ad esempio [0, 255], allora data_range dovrebbe essere impostato a 255. channel_axis=1 indica che la dimensione dei canali è la seconda dimensione del tensore (N, C, H, W).
-            print(f'👉 Test Loss: {loss.item()}, {evalMetrich.__name__}: {metric_value}', end='\r')
+                if evalMetrich.__name__ == 'structural_similarity':
+                    x = x.squeeze() 
+                    x_pred_sample = x_pred_sample.squeeze() 
+
+                evaluation += evalMetrich(x, x_pred_sample, data_range=1.0)
+        
+            average_evaluation = evaluation / len(self.testSet[0])
+            print(f'⚠️: Average {evalMetrich.__name__} on Test Set: {average_evaluation:.4f}')
+        
         else:
-            print(f'👉 Test Loss: {loss.item()}', end='\r')
-        print()
+            evaluation = loss.item()
+            print(f'⚠️: Loss on Test Set: {evaluation:.4f}')
 
-        plt.figure(figsize=(12, 4))
-        plt.subplot(1, 3, 1)
-        plt.title('Ground Truth')
-        plt.imshow(x_vis.squeeze(), cmap='gray')
-        plt.subplot(1, 3, 2)
-        plt.title('Noisy Blurred')
-        plt.imshow(y_vis.squeeze(), cmap='gray')
-        plt.subplot(1, 3, 3)
-        plt.title('Reconstructed')
-        plt.imshow(x_pred_vis.squeeze(), cmap='gray')
-        plt.show()
 
     def train(self):
         loss_history = []
@@ -125,11 +112,11 @@ class MyTrainer():
         val_line, = ax.plot([], [], 'r-')
 
         for epoch in range(self.num_epochs):
-            for index, sample in enumerate(self.train_loader):
+            for index, samples in enumerate(self.train_loader):
                 # sample = (hREsolution, lResolution)
                 print(f'⚠️: Batch {index}/{len(self.train_loader)}', end='\r')
 
-                loss, _, _ = self.evaluate(sample, grad=True) 
+                loss, _, _ = self.evaluate(samples, grad=True) 
                 loss.backward()
 
                 self.optimizer.step() 
@@ -148,7 +135,7 @@ class MyTrainer():
                 fig.canvas.draw()
                 fig.canvas.flush_events()
 
-            if self.validation_set is not None: #⚠️⚠️⚠️⚠️ TO DO!!
+            if self.validation_set is not None:
                 validation_Loss, _, _ = self.evaluate(self.validation_set, grad=False)
                 validation_Loss_history.append(validation_Loss.item())
                 val_line.set_ydata(validation_Loss_history)
@@ -165,5 +152,3 @@ class MyTrainer():
 
         if self.saveModel:
             torch.save(self.model.state_dict(), 'model.pth')
-            #'model.pth' è il nome del file in cui viene salvato lo stato del modello.
-            #self.model.state_dict() è un dizionario che contiene tutti i parametri del modello (pesi e bias) e le loro rispettive chiavi. Questo è il formato standard per salvare i modelli in PyTorch, poiché consente di caricare facilmente i parametri in un modello con la stessa architettura in futuro.

@@ -1,6 +1,11 @@
 from torch import nn
 import torch
 from torch.nn import functional as F
+from MyUtilities import MayoDataset
+from MyUtilities import MyTrainer
+from torch.utils.data import DataLoader
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+
 
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -70,24 +75,23 @@ class UNet(nn.Module):
 
         return self.final_conv(up2) 
     
-from MyUtilities import MayoDataset
-from MyUtilities import MyTrainer
-from torch.utils.data import DataLoader
-
 testDataset = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
 
 # Stampa il formato del sample per verificare che sia una coppia (HR, LR)
 sample = testDataset[0]
-print(f"Sample type: {type(sample)}")
-print(f"Sample length: {len(sample)}")
 HR, LR = sample
-print(f"HR (High Resolution) shape: {HR.shape}")
-print(f"LR (Low Resolution) shape: {LR.shape}")
+print(f" ⚠️ Sample type: {type(sample)}, length: {len(sample)}")
+print(f" ⚠️ HR (High Resolution) shape: {HR.shape} | LR (Low Resolution) shape: {LR.shape}")
 
 testLoader = DataLoader(testDataset, batch_size=32, shuffle=True)
 
-validationSet = next(iter(testLoader))
-print(f'Dataset shape: {validationSet[0].shape} -> (batch_size, channels, height, width)')
+validationSet = next(iter(testLoader)) 
+testSet = next(iter(testLoader))
+
+#print(f' ⚠️ Dataset shape for validation HR: {validationSet[0].shape} -> (batch_size, channels, height, width)')
+#print(f' ⚠️ Dataset shape for validation LR: {validationSet[1].shape} -> (batch_size, channels, height, width)')
+#print(f' ⚠️ Dataset shape for test HR: {testSet[0].shape} -> (batch_size, channels, height, width)')
+#print(f' ⚠️ Dataset shape for test LR: {testSet[1].shape} -> (batch_size, channels, height, width)')
 
 modelUNetAttention = UNet(in_channels=1, out_channels=1)
 
@@ -100,10 +104,12 @@ trainerUNet = MyTrainer(
     loss_fn=torch.nn.MSELoss(),
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=10), 
     num_epochs=3,
-    validation_set=validationSet, 
+    validation_set=validationSet,
+    test_set=testSet, 
     saveModel=True
     )
 
-trainerUNet.train()
-trainerUNet.test()
+trainerUNet.test(evalMetrich=peak_signal_noise_ratio) 
+trainerUNet.test(evalMetrich=structural_similarity)
+#trainerUNet.train()
 

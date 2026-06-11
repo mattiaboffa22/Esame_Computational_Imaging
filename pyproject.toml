@@ -16,9 +16,9 @@ dependencies = [
     "scikit-image",
     "scikit-learn",
     "scipy",
-    "torch>=2.5.1",
-    "torchaudio>=2.5.1",
-    "torchvision>=0.20.1",
+    "torch",
+    "torchaudio",
+    "torchvision"
 ]
 
 [[tool.uv.index]]
