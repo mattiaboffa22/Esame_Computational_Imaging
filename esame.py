@@ -1,11 +1,12 @@
 from torch import nn
 import torch
 from torch.nn import functional as F
-from MyUtilities import MayoDataset
-from MyUtilities import MyTrainer
+from MyUtilities import MayoDataset, Losses, MyTrainer
 from torch.utils.data import DataLoader
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+from sklearn.model_selection import train_test_split
 
+# ⚠️ Receptive Field: 44*44
 
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
@@ -57,7 +58,9 @@ class UNet(nn.Module):
         super(UNet, self).__init__()
         self.input = DoubleConv(in_channels, features[0])
         self.down = downsample(features[0], features[1])
+
         self.bottleneck = downsample(features[1], features[2])
+        
         self.up1 = upsample(features[2], features[1], features[1]) 
         self.up2 = upsample(features[1], features[0], features[0])
         self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1) #Processa ogni pixcel isolatamente, serve per combinare le informazioni provenineti dai diversi channel.
@@ -75,41 +78,38 @@ class UNet(nn.Module):
 
         return self.final_conv(up2) 
     
-testDataset = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
+dataSet = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
+trainSet, testSet = train_test_split(dataSet, test_size=0.25, random_state=42)
+testSet, validationSet = train_test_split(testSet, test_size=0.35, random_state=42)
 
-# Stampa il formato del sample per verificare che sia una coppia (HR, LR)
-sample = testDataset[0]
-HR, LR = sample
-print(f" ⚠️ Sample type: {type(sample)}, length: {len(sample)}")
-print(f" ⚠️ HR (High Resolution) shape: {HR.shape} | LR (Low Resolution) shape: {LR.shape}")
+print(f'⚠️ Training set size: {len(trainSet)}')
+print(f'⚠️ Test set size: {len(testSet)}')
+print(f'⚠️ Validation set size: {len(validationSet)}')
 
-testLoader = DataLoader(testDataset, batch_size=32, shuffle=True)
+trainLoader = DataLoader(trainSet, batch_size=32, shuffle=True)
+validationLoader = DataLoader(validationSet, batch_size=32, shuffle=True)
+testLoader = DataLoader(testSet, batch_size=32, shuffle=True)
 
-validationSet = next(iter(testLoader)) 
-testSet = next(iter(testLoader))
+modelUNet = UNet(in_channels=1, out_channels=1) 
+#modelUNet.load_state_dict(torch.load('./model.pth'))
 
-#print(f' ⚠️ Dataset shape for validation HR: {validationSet[0].shape} -> (batch_size, channels, height, width)')
-#print(f' ⚠️ Dataset shape for validation LR: {validationSet[1].shape} -> (batch_size, channels, height, width)')
-#print(f' ⚠️ Dataset shape for test HR: {testSet[0].shape} -> (batch_size, channels, height, width)')
-#print(f' ⚠️ Dataset shape for test LR: {testSet[1].shape} -> (batch_size, channels, height, width)')
-
-modelUNetAttention = UNet(in_channels=1, out_channels=1)
-
-optimizerUNet = torch.optim.Adam(modelUNetAttention.parameters(), lr=1e-3)
+optimizerUNet = torch.optim.Adam(modelUNet.parameters(), lr=1e-3)
 
 trainerUNet = MyTrainer(
-    model=modelUNetAttention, 
-    train_loader=testLoader, 
+    model=modelUNet, 
+    train_loader=trainLoader, 
     optimizer=optimizerUNet,
-    loss_fn=torch.nn.MSELoss(),
+    loss_fn= Losses().FL_SSIM(FL=0.2, SSIM=0.8),
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=10), 
-    num_epochs=3,
-    validation_set=validationSet,
-    test_set=testSet, 
-    saveModel=True
+    num_epochs=5,
+    validation_loader=validationLoader,
+    test_loader=testLoader, 
+    saveModel=True,
+    modelName="UNet_FL_SSIM"
     )
 
-trainerUNet.test(evalMetrich=peak_signal_noise_ratio) 
-trainerUNet.test(evalMetrich=structural_similarity)
-#trainerUNet.train()
+trainerUNet.train()
+trainerUNet.test()
+trainerUNet.test(evalMetrich=peak_signal_noise_ratio) # A larger PSNR corresponds to a smaller pixel-wise error. It remains a pixel-wise fidelity measure.
+trainerUNet.test(evalMetrich=structural_similarity) # It compares local image patches in terms of luminance, contrast, and structure, and is therefore much more sensitive to structural distortions. SSIM usually takes values between 0 and 1, where values closer to 1 indicate higher similarity.
 
