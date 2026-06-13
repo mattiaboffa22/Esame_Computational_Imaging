@@ -1,4 +1,5 @@
 import glob
+import os
 from PIL import Image
 from torchvision import transforms
 from torch.utils.data import Dataset
@@ -35,7 +36,7 @@ class MayoDataset(Dataset):
         return hResolution, lResolution
     
 class MyTrainer():
-    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, modelName="model", validation_loader=None, test_loader=None):
+    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, modelName="model", validation_loader=None, test_loader=None, best_model=False, betchTrainingValidationPrint = 5, evalMetrich = None):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model = model
         model.to(self.device)
@@ -48,6 +49,9 @@ class MyTrainer():
         self.modelName = modelName
         self.test_loader = test_loader
         self.validation_loader = validation_loader
+        self.best_model = best_model
+        self.betchTrainingValidationPrint = betchTrainingValidationPrint
+        self.evalMetrich = evalMetrich
 
     def evaluate(self, samples, grad = False):
         x, y = samples # (x, y): x = grandTruth, y = LowResolution x = [x1,x2,x3....], y = [y1,y2,y3....]
@@ -63,8 +67,11 @@ class MyTrainer():
         loss = self.loss_fn(x_pred, x) 
         return loss, y, x_pred
 
-    def test(self, evalMetrich = None): 
-        print(f'🔁 : Testing=> {evalMetrich.__name__ if evalMetrich else "Loss function"}')
+    def test(self): 
+        print(f'🔄️ :Testing=> {self.evalMetrich.__name__ if self.evalMetrich else "Loss function"}')
+        if not self.test_loader:
+            print(f'🚨 No one test set.')
+            return
         CumulativeEvaluation = 0.0
         samplesCounter = 0
 
@@ -72,40 +79,44 @@ class MyTrainer():
             print(f'🔁 : test batch: {testIndex}', end='\r')
             test_Loss, _, modelPredictions = self.evaluate(testSamples, grad=False)
 
-            if evalMetrich:
+            if self.evalMetrich:
                 for i in range(len(modelPredictions)):
 
                     x = testSamples[0][i].cpu().numpy()
                     x_pred_sample = modelPredictions[i].cpu().numpy()
 
-                    if evalMetrich.__name__ == 'structural_similarity':
+                    if self.evalMetrich.__name__ == 'structural_similarity':
                         x = x.squeeze() 
                         x_pred_sample = x_pred_sample.squeeze() 
 
-                    CumulativeEvaluation += evalMetrich(x, x_pred_sample, data_range=1.0)
+                    CumulativeEvaluation += self.evalMetrich(x, x_pred_sample, data_range=1.0)
                     samplesCounter += 1
 
             else:
                 CumulativeEvaluation += test_Loss.item()
 
-        print(f'⚠️: Average {evalMetrich.__name__ if evalMetrich else "Loss function"} on Test Set: {CumulativeEvaluation/samplesCounter if evalMetrich else CumulativeEvaluation/len(self.test_loader):.4f}')
+        print(f'⚠️: Average {self.evalMetrich.__name__ if self.evalMetrich else "Loss function"} on Test Set: {CumulativeEvaluation/samplesCounter if self.evalMetrich else CumulativeEvaluation/len(self.test_loader):.4f}')
 
     def train(self):
+        epochs = []
         loss_history = []
         validation_Loss_history = []
+        currentBestModelValidationLoss = float('inf')
 
         fig, ax = plt.subplots()
-        ax.set_xlabel('Epoch')
-        ax.set_ylabel('Loss')
-        ax.set_title('Cumulative training loss, Validation Loss')
+        ax.set_xlabel(f'Epoch')
+        ax.set_ylabel('Losses')
+        ax.set_title(f'Cumulative training and validation Loss with: {self.loss_fn.__name__}')
         line, = ax.plot([], [], 'b-')
         val_line, = ax.plot([], [], 'r-')
 
         for epoch in range(self.num_epochs):
-            cumulativeLoss = 0.0
+
+            cumulativeLoss = 0.0 # Cumulative training loss over self.betchTrainingValidationPrint betches
+            
             for trainIndex, trainSamples in enumerate(self.train_loader):
                 # sample = (hREsolution, lResolution)
-                print(f'⚠️: Batch {trainIndex}/{len(self.train_loader)}', end='\r')
+                print(f'🔄️ : Training on batch {trainIndex}/{len(self.train_loader)}', end='\r')
 
                 loss, _, _ = self.evaluate(trainSamples, grad=True)
                 cumulativeLoss += loss.item()
@@ -116,29 +127,51 @@ class MyTrainer():
 
                 self.scheduler.step()
 
-            loss_history.append(cumulativeLoss / len(self.train_loader))
+                if trainIndex > 0 and trainIndex % self.betchTrainingValidationPrint == 0:
+                    
+                    loss_history.append(cumulativeLoss / self.betchTrainingValidationPrint)
+                    epochs.append((epoch * len(self.train_loader) + trainIndex) / len(self.train_loader))
+                    # batch attuale / batch per epoca
+                    cumulativeLoss = 0.0
 
-            if self.validation_loader is not None:
-                print(f'🔁 : Evaluating on validation set...', end='\r')
-                cumulativeValidationLoss = 0
-                for validationIndex, validationSamples in enumerate(self.validation_loader):
-                    print(f'🔁 : validation batch: {validationIndex}', end='\r')
-                    validation_Loss, _, _ = self.evaluate(validationSamples, grad=False)
-                    cumulativeValidationLoss += validation_Loss
-                validation_Loss_history.append(validation_Loss.item()/len(self.validation_loader))
-                val_line.set_ydata(validation_Loss_history)
-                val_line.set_xdata(range(len(validation_Loss_history)))
-                val_line.set_label('Validation Loss')
+                    if self.validation_loader is not None:
+                        print(f'🔄️ : Evaluating on validation set...', end='\r')
+                        print()
 
-            line.set_xdata(range(len(loss_history)))
-            line.set_ydata(loss_history)
-            line.set_label('Cumulative batch Loss')
-            ax.legend()
-            ax.relim()
-            ax.autoscale_view()
+                        cumulativeValidationLoss = 0 # Cumulative validation loss over all validation set
 
-            fig.savefig(f"{self.modelName}_Training_Loss_Plot.png")
-            print(f'✅: Saved loss plot: {self.modelName}_Training_Loss_Plot.png')
+                        for validationIndex, validationBetch in enumerate(self.validation_loader):
+                            print(f'🔄️ : validation batch: {validationIndex}/{len(self.validation_loader)}', end='\r')
+
+                            validation_Loss, _, _ = self.evaluate(validationBetch, grad=False)
+                            cumulativeValidationLoss += validation_Loss.item() #⚠️⚠️
+
+                        avarageValidationLoss = cumulativeValidationLoss/len(self.validation_loader)
+
+                        # If the current cumulative validation loss is the minimum validation loss them save this model
+                        if self.best_model and  avarageValidationLoss < currentBestModelValidationLoss:
+                            print()
+                            print(f'⏬: Saving best model: {self.modelName}', end='\r')
+                            print()
+                            currentBestModelValidationLoss = avarageValidationLoss
+                            torch.save(self.model.state_dict(), f'{self.modelName}.pth')
+
+                        validation_Loss_history.append(avarageValidationLoss)
+
+                        val_line.set_ydata(validation_Loss_history)
+                        val_line.set_xdata(epochs)
+                        val_line.set_label(f'Cumulative validation loss on: {len(self.validation_loader)} betches')
+
+                    line.set_xdata(epochs)
+                    line.set_ydata(loss_history)
+                    line.set_label(f'Cumulative training loss on: {self.betchTrainingValidationPrint} betches')
+                    ax.legend()
+                    ax.relim()
+                    ax.autoscale_view()
+
+                    fig.savefig(f"{self.modelName}_Training_Loss_Plot.png")
+                    print(f'✅: Saved loss plot: {self.modelName}_Training_Loss_Plot.png', end='\r')
+                    print()
 
             print()
             print(f'👉 Epoch {epoch}, Loss: {loss.item()}, LR: {self.scheduler.get_last_lr()}', end='\r')
@@ -146,9 +179,52 @@ class MyTrainer():
 
         plt.close(fig)
 
-        if self.saveModel:
-            print('⚠️: Saving model: ', self.modelName)
+        if self.saveModel and not self.best_model:
+            print('✅: Saving model at end training: ', self.modelName)
             torch.save(self.model.state_dict(), f'{self.modelName}.pth')
+
+    def testOnImage(self, path, data_shape_HR, data_shape_LR, noise_level):
+        hResolution = Image.open(path).convert('L') 
+        hResolution = transforms.Compose([ 
+            transforms.ToTensor(), 
+            transforms.Resize(data_shape_HR), 
+        ])(hResolution)
+
+        lResolution = transforms.Resize(data_shape_LR)(hResolution) #Downsampling dell'immagine ad alta risoluzione 
+        with torch.no_grad():
+            lResolution += utilities.gaussian_noise(lResolution, noise_level) #Aggiunta di rumore gaussiano all'immagine a bassa risoluzione ⚠️⚠️⚠️
+        lResolution = transforms.Resize(data_shape_HR)(lResolution) #Upsampling dell'immagine a bassa risoluzione alla stessa dimensione dell'immagine ad alta risoluzione
+
+        # Esegui il modello sull'immagine lResolution e confronta il risultato con hResolution
+        #self.model.eval()
+        with torch.no_grad():
+            lResolution = lResolution.unsqueeze(0).to(self.device)
+            hResolution = hResolution.unsqueeze(0).to(self.device)
+            prediction = self.model(lResolution)
+
+        prediction = prediction.squeeze(0)
+        target = hResolution.squeeze(0)
+
+        if self.evalMetrich:
+            x_pred_np = prediction.cpu().numpy()
+            target_np = target.cpu().numpy()
+            if self.evalMetrich.__name__ == 'structural_similarity':
+                x_pred_np = x_pred_np.squeeze()
+                target_np = target_np.squeeze()
+            metric_value = self.evalMetrich(target_np, x_pred_np, data_range=1.0)
+        else:
+            metric_value = self.loss_fn(prediction.unsqueeze(0), hResolution).item()
+
+        # Save prediction and target as images
+        os.makedirs('Results', exist_ok=True)
+        pred_img = transforms.ToPILImage()(prediction.cpu())
+        target_img = transforms.ToPILImage()(target.cpu())
+        pred_path = os.path.join('Results', 'prediction.png') #⚠️⚠️⚠️ Fix
+        target_path = os.path.join('Results', 'target.png') #⚠️⚠️⚠️ Fix
+        pred_img.save(pred_path)
+        target_img.save(target_path)
+
+        return metric_value
 
 class FourierLoss(nn.Module):
     def forward(self, x, y):
@@ -172,8 +248,12 @@ class SSIMLoss(nn.Module): # it compares local patches based on luminance, contr
         return 1.0 - ssim_map.mean()
     
 class Losses():
-    def FL_SSIM(self,FL=0.5, SSIM=0.5):
-        return lambda x, y: FL * FourierLoss()(x, y) + SSIM * SSIMLoss()(x, y)
-    
+    def FL_SSIM(self, FL=0.5, SSIM=0.5):
+        fn = lambda x, y: FL * FourierLoss()(x, y) + SSIM * SSIMLoss()(x, y)
+        fn.__name__ = "FL_SSIM" 
+        return fn
+
     def MSE_SSIM_FL(self, MSE=0.3, FL=0.3, SSIM=0.3):
-        return lambda x, y: MSE * torch.nn.MSELoss()(x, y) + FL * FourierLoss()(x, y) + SSIM * SSIMLoss()(x, y)
+        fn = lambda x, y: MSE * torch.nn.MSELoss()(x, y) + FL * FourierLoss()(x, y) + SSIM * SSIMLoss()(x, y)
+        fn.__name__ = "MSE_SSIM_FL" 
+        return fn

@@ -78,38 +78,48 @@ class UNet(nn.Module):
 
         return self.final_conv(up2) 
     
-dataSet = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
-trainSet, testSet = train_test_split(dataSet, test_size=0.25, random_state=42)
-testSet, validationSet = train_test_split(testSet, test_size=0.35, random_state=42)
+dataSetTrain = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
+trainSet, validationSet = train_test_split(dataSetTrain, test_size=0.25, random_state=42)
+testSet = MayoDataset(data_path='./Mayo/test', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
+betchSize = 32
 
-print(f'⚠️ Training set size: {len(trainSet)}')
-print(f'⚠️ Test set size: {len(testSet)}')
-print(f'⚠️ Validation set size: {len(validationSet)}')
 
-trainLoader = DataLoader(trainSet, batch_size=32, shuffle=True)
-validationLoader = DataLoader(validationSet, batch_size=32, shuffle=True)
-testLoader = DataLoader(testSet, batch_size=32, shuffle=True)
+print(f'⚠️ Training set size: {len(trainSet)} with betch: {betchSize}')
+print(f'⚠️ Test set size: {len(testSet)} with betch: {betchSize}')
+print(f'⚠️ Validation set size: {len(validationSet)} with betch: {betchSize}')
+
+trainLoader = DataLoader(trainSet, batch_size=betchSize, shuffle=True)
+validationLoader = DataLoader(validationSet, batch_size=betchSize, shuffle=True)
+testLoader = DataLoader(testSet, batch_size=betchSize, shuffle=True)
 
 modelUNet = UNet(in_channels=1, out_channels=1) 
-#modelUNet.load_state_dict(torch.load('./model.pth'))
+#modelUNet.load_state_dict(torch.load('./UNet_FL_SSIM.pth'))
 
-optimizerUNet = torch.optim.Adam(modelUNet.parameters(), lr=1e-3)
+optimizerUNet = torch.optim.Adam(modelUNet.parameters(), lr=1e-4)
 
 trainerUNet = MyTrainer(
     model=modelUNet, 
     train_loader=trainLoader, 
     optimizer=optimizerUNet,
-    loss_fn= Losses().FL_SSIM(FL=0.2, SSIM=0.8),
+    loss_fn= Losses().MSE_SSIM_FL(MSE=0.1, FL=0.3, SSIM=0.6),
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=10), 
     num_epochs=5,
     validation_loader=validationLoader,
-    test_loader=testLoader, 
-    saveModel=True,
-    modelName="UNet_FL_SSIM"
+    test_loader=testLoader,
+    modelName="UNet_MSE_SSIM_FL",
+    best_model=True,
+    betchTrainingValidationPrint=5,
+    evalMetrich=structural_similarity
+    # It compares local image patches in terms of luminance, contrast, and structure, and is therefore much more sensitive to structural distortions. SSIM usually takes values between 0 and 1, where values closer to 1 indicate higher similarity.
     )
+
 
 trainerUNet.train()
 trainerUNet.test()
-trainerUNet.test(evalMetrich=peak_signal_noise_ratio) # A larger PSNR corresponds to a smaller pixel-wise error. It remains a pixel-wise fidelity measure.
-trainerUNet.test(evalMetrich=structural_similarity) # It compares local image patches in terms of luminance, contrast, and structure, and is therefore much more sensitive to structural distortions. SSIM usually takes values between 0 and 1, where values closer to 1 indicate higher similarity.
+print('Test on image: ', trainerUNet.testOnImage(path='./267.png', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005))
+
+trainerUNet.evalMetrich = peak_signal_noise_ratio
+# A larger PSNR corresponds to a smaller pixel-wise error. It remains a pixel-wise fidelity measure.
+trainerUNet.test()
+
 
