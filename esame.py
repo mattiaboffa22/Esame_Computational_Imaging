@@ -95,31 +95,29 @@ testLoader = DataLoader(testSet, batch_size=betchSize, shuffle=True)
 modelUNet = UNet(in_channels=1, out_channels=1) 
 #modelUNet.load_state_dict(torch.load('./UNet_FL_SSIM.pth'))
 
-optimizerUNet = torch.optim.Adam(modelUNet.parameters(), lr=1e-4)
+optimizerUNet = torch.optim.Adam(modelUNet.parameters(), lr=5e-4)
 
 trainerUNet = MyTrainer(
     model=modelUNet, 
     train_loader=trainLoader, 
     optimizer=optimizerUNet,
-    loss_fn= Losses().MSE_SSIM_FL(MSE=0.1, FL=0.3, SSIM=0.6),
-    scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=10), 
-    num_epochs=5,
+    loss_fn= Losses(MSE=0.1, FL=0.8, SSIM=0.8).MSE_SSIM_FL(),
+    scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=2), 
+    num_epochs=8,
     validation_loader=validationLoader,
     test_loader=testLoader,
-    modelName="UNet_MSE_SSIM_FL",
+    modelName="UNet_MSE_SSIM_FL_0.0",
     best_model=True,
-    betchTrainingValidationPrint=5,
+    betchTrainingValidationPrint=10,
     evalMetrich=structural_similarity
     # It compares local image patches in terms of luminance, contrast, and structure, and is therefore much more sensitive to structural distortions. SSIM usually takes values between 0 and 1, where values closer to 1 indicate higher similarity.
     )
 
-
 trainerUNet.train()
 trainerUNet.test()
-print('Test on image: ', trainerUNet.testOnImage(path='./267.png', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005))
-
 trainerUNet.evalMetrich = peak_signal_noise_ratio
-# A larger PSNR corresponds to a smaller pixel-wise error. It remains a pixel-wise fidelity measure.
 trainerUNet.test()
+print('Test on image: ', trainerUNet.testOnImage(path='./267.png', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005))
+# A larger PSNR corresponds to a smaller pixel-wise error. It remains a pixel-wise fidelity measure.
 
 

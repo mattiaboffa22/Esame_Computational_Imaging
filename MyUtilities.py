@@ -52,6 +52,8 @@ class MyTrainer():
         self.best_model = best_model
         self.betchTrainingValidationPrint = betchTrainingValidationPrint
         self.evalMetrich = evalMetrich
+        self.modelEvaluationOnTest = []
+        self.modelEvaluationOnImages = []
 
     def evaluate(self, samples, grad = False):
         x, y = samples # (x, y): x = grandTruth, y = LowResolution x = [x1,x2,x3....], y = [y1,y2,y3....]
@@ -95,7 +97,18 @@ class MyTrainer():
             else:
                 CumulativeEvaluation += test_Loss.item()
 
-        print(f'⚠️: Average {self.evalMetrich.__name__ if self.evalMetrich else "Loss function"} on Test Set: {CumulativeEvaluation/samplesCounter if self.evalMetrich else CumulativeEvaluation/len(self.test_loader):.4f}')
+        if self.evalMetrich:
+            key = self.evalMetrich.__name__
+            avg = CumulativeEvaluation / samplesCounter 
+        else:
+            key = "Loss function"
+            avg = CumulativeEvaluation / len(self.test_loader)
+
+        self.modelEvaluationOnTest.append({key: avg})
+
+        print(f'⚠️: Average {self.evalMetrich.__name__ if self.evalMetrich else "Loss function"} on Test Set: {avg:.4f}')
+
+        self.logTrain()
 
     def train(self):
         epochs = []
@@ -151,10 +164,10 @@ class MyTrainer():
                         # If the current cumulative validation loss is the minimum validation loss them save this model
                         if self.best_model and  avarageValidationLoss < currentBestModelValidationLoss:
                             print()
-                            print(f'⏬: Saving best model: {self.modelName}', end='\r')
+                            print(f'⏬: Saving best model: ./Results/{self.modelName}', end='\r')
                             print()
                             currentBestModelValidationLoss = avarageValidationLoss
-                            torch.save(self.model.state_dict(), f'{self.modelName}.pth')
+                            torch.save(self.model.state_dict(), f'./Results/{self.modelName}.pth')
 
                         validation_Loss_history.append(avarageValidationLoss)
 
@@ -169,8 +182,8 @@ class MyTrainer():
                     ax.relim()
                     ax.autoscale_view()
 
-                    fig.savefig(f"{self.modelName}_Training_Loss_Plot.png")
-                    print(f'✅: Saved loss plot: {self.modelName}_Training_Loss_Plot.png', end='\r')
+                    fig.savefig(f"./Results/{self.modelName}_Training_Loss_Plot.png")
+                    print(f'✅: Saved loss plot: ./Results/{self.modelName}_Training_Loss_Plot.png', end='\r')
                     print()
 
             print()
@@ -182,6 +195,8 @@ class MyTrainer():
         if self.saveModel and not self.best_model:
             print('✅: Saving model at end training: ', self.modelName)
             torch.save(self.model.state_dict(), f'{self.modelName}.pth')
+        
+        self.logTrain()
 
     def testOnImage(self, path, data_shape_HR, data_shape_LR, noise_level):
         hResolution = Image.open(path).convert('L') 
@@ -224,7 +239,40 @@ class MyTrainer():
         pred_img.save(pred_path)
         target_img.save(target_path)
 
+        self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_{self.evalMetrich__name__ if self.evalMetrich else "Training loss"}': metric_value})
+        self.logTrain()
         return metric_value
+
+    def logTrain(self):
+
+        os.makedirs('Results', exist_ok=True)
+        # Prepare serializable representations
+        loss_fn_name = self.loss_fn.__name__ if self.loss_fn is not None else None
+        scheduler_name = type(self.scheduler).__name__ if self.scheduler is not None else None
+
+        loss_params = {
+            'FL': getattr(self.loss_fn, 'FL', None),
+            'SSIM': getattr(self.loss_fn, 'SSIM', None),
+            'MSE': getattr(self.loss_fn, 'MSE', None)
+        }
+
+        meta = {
+            'num_epochs': self.num_epochs,
+            'loss_fn': loss_fn_name,
+            'scheduler': scheduler_name,
+            'best_model': bool(self.best_model),
+            'betchTrainingValidationPrint': int(self.betchTrainingValidationPrint),
+            'loss_params': loss_params,
+            'modelEvaluationOnTest': self.modelEvaluationOnTest,
+            'modelEvaluationOnImages': self.modelEvaluationOnImages
+        }
+
+        json_path = os.path.join('Results', f'{self.modelName}.json')
+        import json
+        with open(json_path, 'w', encoding='utf-8') as f:
+            json.dump(meta, f, indent=4, ensure_ascii=False)
+        return json_path
+        
 
 class FourierLoss(nn.Module):
     def forward(self, x, y):
@@ -248,12 +296,23 @@ class SSIMLoss(nn.Module): # it compares local patches based on luminance, contr
         return 1.0 - ssim_map.mean()
     
 class Losses():
-    def FL_SSIM(self, FL=0.5, SSIM=0.5):
-        fn = lambda x, y: FL * FourierLoss()(x, y) + SSIM * SSIMLoss()(x, y)
-        fn.__name__ = "FL_SSIM" 
+    def __init__(self,FL = 0.5, SSIM = 0.8, MSE = 0.2):
+        self.FL = FL
+        self.SSIM = SSIM
+        self.MSE = MSE
+
+    def FL_SSIM(self,):
+        fn = lambda x, y: self.FL * FourierLoss()(x, y) + self.SSIM * SSIMLoss()(x, y)
+        fn.__name__ = "FL_SSIM"
+        fn.FL = self.FL
+        fn.SSIM = self.SSIM
+        fn.MSE = None
         return fn
 
-    def MSE_SSIM_FL(self, MSE=0.3, FL=0.3, SSIM=0.3):
-        fn = lambda x, y: MSE * torch.nn.MSELoss()(x, y) + FL * FourierLoss()(x, y) + SSIM * SSIMLoss()(x, y)
-        fn.__name__ = "MSE_SSIM_FL" 
+    def MSE_SSIM_FL(self):
+        fn = lambda x, y: self.MSE * torch.nn.MSELoss()(x, y) + self.FL * FourierLoss()(x, y) + self.SSIM * SSIMLoss()(x, y)
+        fn.__name__ = "MSE_SSIM_FL"
+        fn.FL = self.FL
+        fn.SSIM = self.SSIM
+        fn.MSE = self.MSE
         return fn
