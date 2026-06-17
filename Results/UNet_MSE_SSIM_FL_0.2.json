@@ -1,0 +1,25 @@
+{
+    "num_epochs": 8,
+    "loss_fn": "FL_SSIM",
+    "scheduler": "CosineAnnealingLR",
+    "best_model": true,
+    "betchTrainingValidationPrint": 25,
+    "loss_params": {
+        "FL": 0.5,
+        "SSIM": 1,
+        "MSE": null
+    },
+    "modelEvaluationOnTest": [
+        {
+            "structural_similarity": 0.961232572279704
+        },
+        {
+            "peak_signal_noise_ratio": 37.525994443018156
+        }
+    ],
+    "modelEvaluationOnImages": [
+        {
+            "./267.png_(128, 128)_to_(256, 256)_peak_signal_noise_ratio": 38.53501924506642
+        }
+    ]
+}

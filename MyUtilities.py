@@ -36,7 +36,7 @@ class MayoDataset(Dataset):
         return hResolution, lResolution
     
 class MyTrainer():
-    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, modelName="model", validation_loader=None, test_loader=None, best_model=False, betchTrainingValidationPrint = 5, evalMetrich = None):
+    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, modelName="model", validation_loader=None, test_loader=None, best_model=False, betchTrainingValidationPrint = 5, evalMetrich = []):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model = model
         model.to(self.device)
@@ -70,43 +70,49 @@ class MyTrainer():
         return loss, y, x_pred
 
     def test(self): 
-        print(f'🔄️ :Testing=> {self.evalMetrich.__name__ if self.evalMetrich else "Loss function"}')
+        metrics_names = ', '.join([m.__name__ for m in self.evalMetrich]) if self.evalMetrich else "Loss function"
+        print(f'🔄️ :Testing=> {metrics_names}')
         if not self.test_loader:
             print(f'🚨 No one test set.')
             return
-        CumulativeEvaluation = 0.0
-        samplesCounter = 0
 
-        for testIndex, testSamples in enumerate(self.test_loader):
-            print(f'🔁 : test batch: {testIndex}', end='\r')
-            test_Loss, _, modelPredictions = self.evaluate(testSamples, grad=False)
+        if self.evalMetrich:
+            # Esegui tutte le metriche di valutazione
+            metric_cumulative = {m.__name__: 0.0 for m in self.evalMetrich}
+            samplesCounter = 0
 
-            if self.evalMetrich:
+            for testIndex, testSamples in enumerate(self.test_loader):
+                print(f'🔁 : test batch: {testIndex}', end='\r')
+                test_Loss, _, modelPredictions = self.evaluate(testSamples, grad=False)
+
                 for i in range(len(modelPredictions)):
-
                     x = testSamples[0][i].cpu().numpy()
                     x_pred_sample = modelPredictions[i].cpu().numpy()
 
-                    if self.evalMetrich.__name__ == 'structural_similarity':
-                        x = x.squeeze() 
-                        x_pred_sample = x_pred_sample.squeeze() 
-
-                    CumulativeEvaluation += self.evalMetrich(x, x_pred_sample, data_range=1.0)
+                    for metric_fn in self.evalMetrich:
+                        x_metric = x.squeeze() if metric_fn.__name__ == 'structural_similarity' else x
+                        x_pred_metric = x_pred_sample.squeeze() if metric_fn.__name__ == 'structural_similarity' else x_pred_sample
+                        metric_cumulative[metric_fn.__name__] += metric_fn(x_metric, x_pred_metric, data_range=1.0)
+                    
                     samplesCounter += 1
 
-            else:
+            # Calcola e registra le medie per tutte le metriche
+            for metric_fn in self.evalMetrich:
+                metric_name = metric_fn.__name__
+                avg = metric_cumulative[metric_name] / samplesCounter
+                self.modelEvaluationOnTest.append({metric_name: avg})
+                print(f'⚠️: Average {metric_name} on Test Set: {avg:.4f}')
+        else:
+            # Usa la funzione di perdita come fallback
+            CumulativeEvaluation = 0.0
+            for testIndex, testSamples in enumerate(self.test_loader):
+                print(f'🔁 : test batch: {testIndex}', end='\r')
+                test_Loss, _, _ = self.evaluate(testSamples, grad=False)
                 CumulativeEvaluation += test_Loss.item()
 
-        if self.evalMetrich:
-            key = self.evalMetrich.__name__
-            avg = CumulativeEvaluation / samplesCounter 
-        else:
-            key = "Loss function"
             avg = CumulativeEvaluation / len(self.test_loader)
-
-        self.modelEvaluationOnTest.append({key: avg})
-
-        print(f'⚠️: Average {self.evalMetrich.__name__ if self.evalMetrich else "Loss function"} on Test Set: {avg:.4f}')
+            self.modelEvaluationOnTest.append({"Loss function": avg})
+            print(f'⚠️: Average Loss function on Test Set: {avg:.4f}')
 
         self.logTrain()
 
@@ -138,8 +144,6 @@ class MyTrainer():
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
-                self.scheduler.step()
-
                 if trainIndex > 0 and trainIndex % self.betchTrainingValidationPrint == 0:
                     
                     loss_history.append(cumulativeLoss / self.betchTrainingValidationPrint)
@@ -164,7 +168,7 @@ class MyTrainer():
                         # If the current cumulative validation loss is the minimum validation loss them save this model
                         if self.best_model and  avarageValidationLoss < currentBestModelValidationLoss:
                             print()
-                            print(f'⏬: Saving best model: ./Results/{self.modelName}', end='\r')
+                            print(f'⏬: Saving best model: ./Results/{self.modelName}: {avarageValidationLoss}', end='\r')
                             print()
                             currentBestModelValidationLoss = avarageValidationLoss
                             torch.save(self.model.state_dict(), f'./Results/{self.modelName}.pth')
@@ -185,6 +189,8 @@ class MyTrainer():
                     fig.savefig(f"./Results/{self.modelName}_Training_Loss_Plot.png")
                     print(f'✅: Saved loss plot: ./Results/{self.modelName}_Training_Loss_Plot.png', end='\r')
                     print()
+
+            self.scheduler.step()
 
             print()
             print(f'👉 Epoch {epoch}, Loss: {loss.item()}, LR: {self.scheduler.get_last_lr()}', end='\r')
@@ -220,15 +226,21 @@ class MyTrainer():
         prediction = prediction.squeeze(0)
         target = hResolution.squeeze(0)
 
+        x_pred_np = prediction.cpu().numpy()
+        target_np = target.cpu().numpy()
+
         if self.evalMetrich:
-            x_pred_np = prediction.cpu().numpy()
-            target_np = target.cpu().numpy()
-            if self.evalMetrich.__name__ == 'structural_similarity':
-                x_pred_np = x_pred_np.squeeze()
-                target_np = target_np.squeeze()
-            metric_value = self.evalMetrich(target_np, x_pred_np, data_range=1.0)
+            # Esegui tutte le metriche di valutazione
+            for metric_fn in self.evalMetrich:
+                x_pred_metric = x_pred_np.squeeze() if metric_fn.__name__ == 'structural_similarity' else x_pred_np
+                target_metric = target_np.squeeze() if metric_fn.__name__ == 'structural_similarity' else target_np
+                metric_value = metric_fn(target_metric, x_pred_metric, data_range=1.0)
+                metric_name = metric_fn.__name__
+                self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_{metric_name}': metric_value})
         else:
+            # Usa la funzione di perdita come fallback
             metric_value = self.loss_fn(prediction.unsqueeze(0), hResolution).item()
+            self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_Training loss': metric_value})
 
         # Save prediction and target as images
         os.makedirs('Results', exist_ok=True)
@@ -239,9 +251,8 @@ class MyTrainer():
         pred_img.save(pred_path)
         target_img.save(target_path)
 
-        self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_{self.evalMetrich__name__ if self.evalMetrich else "Training loss"}': metric_value})
         self.logTrain()
-        return metric_value
+        return metric_value if self.evalMetrich else metric_value
 
     def logTrain(self):
 
@@ -287,11 +298,12 @@ class SSIMLoss(nn.Module): # it compares local patches based on luminance, contr
         self.c2 = c2
 
     def forward(self, x, y):
-        mu_x = torch.nn.functional.avg_pool2d(x, kernel_size=3, stride=1, padding=1)
-        mu_y = torch.nn.functional.avg_pool2d(y, kernel_size=3, stride=1, padding=1)
-        sigma_x = torch.nn.functional.avg_pool2d(x * x, kernel_size=3, stride=1, padding=1) - mu_x ** 2
-        sigma_y = torch.nn.functional.avg_pool2d(y * y, kernel_size=3, stride=1, padding=1) - mu_y ** 2
-        sigma_xy = torch.nn.functional.avg_pool2d(x * y, kernel_size=3, stride=1, padding=1) - mu_x * mu_y
+        self.kernelSize = 7
+        mu_x = torch.nn.functional.avg_pool2d(x, kernel_size=self.kernelSize, stride=1, padding=1)
+        mu_y = torch.nn.functional.avg_pool2d(y, kernel_size=self.kernelSize, stride=1, padding=1)
+        sigma_x = torch.nn.functional.avg_pool2d(x * x, kernel_size=self.kernelSize, stride=1, padding=1) - mu_x ** 2
+        sigma_y = torch.nn.functional.avg_pool2d(y * y, kernel_size=self.kernelSize, stride=1, padding=1) - mu_y ** 2
+        sigma_xy = torch.nn.functional.avg_pool2d(x * y, kernel_size=self.kernelSize, stride=1, padding=1) - mu_x * mu_y
         ssim_map = ((2 * mu_x * mu_y + self.c1) * (2 * sigma_xy + self.c2)) / ((mu_x ** 2 + mu_y ** 2 + self.c1) * (sigma_x + sigma_y + self.c2) + 1e-8)
         return 1.0 - ssim_map.mean()
     
