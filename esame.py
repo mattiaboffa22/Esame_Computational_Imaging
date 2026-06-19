@@ -68,6 +68,38 @@ class upsample(nn.Module):
         """
         return self.conv(x)
     
+class AttentionGate(nn.Module):
+    def __init__(self, x_channels, skip_channels, inter_channels):
+        super().__init__()
+        self.x_ch_filters = nn.Conv2d(x_channels // 4, inter_channels, kernel_size=1) #Adatta il numero di canali dell'immagine in ingresso dopo PixelShuffle a un numero intermedio di canali.
+        self.skip_ch_filters = nn.Conv2d(skip_channels, inter_channels, kernel_size=1) #Adatta il numero di canali dell'immagine skip (skip_channels) a un numero intermedio di canali (inter_channels) utilizzando una convoluzione 1x1.
+        self.up = nn.PixelShuffle(upscale_factor=2) #Aumenta la dimensione spaziale dell'immagine di 2 usando PixelShuffle.
+        self.combine_ch = nn.Conv2d(inter_channels, 1, kernel_size=1) #Combina le informazioni provenienti dai canali intermedi (inter_channels) in un singolo canale di output utilizzando una convoluzione 1x1. Questo passaggio è spesso utilizzato per generare una mappa di attenzione che evidenzia le aree importanti dell'immagine.
+        self.resize_ch = nn.Conv2d(1, skip_channels, kernel_size=1) #Riporta il numero di canali dell'immagine di attenzione (1) al numero originale di canali dell'immagine skip (skip_channels) utilizzando una convoluzione 1x1. Questo passaggio è necessario per applicare la mappa di attenzione all'immagine skip.
+
+        self.double_conv = DoubleConv(skip_channels, skip_channels)
+
+        self.relu = nn.ReLU()
+        self.sigmoid = nn.Sigmoid()
+
+
+    def forward(self, x, skipp):
+
+        original_skipp = skipp
+
+        x = self.up(x)
+        if x.shape[-2:] != skipp.shape[-2:]:
+            x = F.interpolate(x, size=skipp.shape[-2:], mode='bilinear', align_corners=False)
+        
+        x = self.x_ch_filters(x)
+        skipp_filtered = self.skip_ch_filters(skipp)
+
+        combineFeatchures = self.relu(x + skipp_filtered)
+        combineChannel = self.sigmoid(self.combine_ch(combineFeatchures))
+        AttentionMask = self.resize_ch(combineChannel)
+
+        return self.double_conv(original_skipp * AttentionMask)
+ 
 class UNet(nn.Module):
     def __init__(self, in_channels=1, out_channels=1, features=[64, 128, 256, 512]):
         super(UNet, self).__init__()
@@ -80,11 +112,12 @@ class UNet(nn.Module):
         # --- BOTTLENECK ---
         self.bottleneck = downsample(features[2], features[3])          # 256 -> 512
         
-        # --- DECODER (Expansion Path) ---
-        # upsample prende: (in_channels_dalla_base, in_channels_dalla_skip_connection, out_channels)
-        self.up1 = upsample(features[3], features[2], features[2])      # 512 + 256 -> 256
-        self.up2 = upsample(features[2], features[1], features[1])      # 256 + 128 -> 128
-        self.up3 = upsample(features[1], features[0], features[0])      # 128 + 64 -> 64
+        # --- DECODER (Expansion Path) using Attention Gates ---
+        # Replace previous upsample blocks with AttentionGate + DoubleConv fusion
+        # attention: x_channels (from previous layer), skip_channels (from encoder), inter_channels (reduced)
+        self.att1 = AttentionGate(x_channels=features[3], skip_channels=features[2], inter_channels=max(1, features[2] // 2))
+        self.att2 = AttentionGate(x_channels=features[2], skip_channels=features[1], inter_channels=max(1, features[1] // 2))
+        self.att3 = AttentionGate(x_channels=features[1], skip_channels=features[0], inter_channels=max(1, features[0] // 2))
         
         # --- OUTPUT ---
         self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size=1) 
@@ -98,15 +131,15 @@ class UNet(nn.Module):
         # --- Bottleneck ---
         bottleneck = self.bottleneck(down2)
         
-        # --- Decoder con Skip Connections ---
-        # 1. up1 riceve il bottleneck e la skip connection 'down2'
-        up1 = self.up1(bottleneck, down2) 
-        
-        # 2. up2 riceve up1 e la skip connection 'down1'
-        up2 = self.up2(up1, down1)
-        
-        # 3. up3 riceve up2 e la skip connection iniziale 'x_input'
-        up3 = self.up3(up2, x_input)
+        # --- Decoder con Skip Connections e Attention Gate ---
+        # 1. attention on (bottleneck, down2)
+        up1 = self.att1(bottleneck, down2)
+
+        # 2. attention on (up1, down1)
+        up2 = self.att2(up1, down1)
+
+        # 3. attention on (up2, x_input)
+        up3 = self.att3(up2, x_input)
 
         # --- Output Finale ---
         return x - self.final_conv(up3) # X = Y + n => X - Y = n
@@ -114,7 +147,7 @@ class UNet(nn.Module):
 dataSetTrain = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
 trainSet, validationSet = train_test_split(dataSetTrain, test_size=0.15, random_state=42)
 testSet = MayoDataset(data_path='./Mayo/test', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
-betchSize = 40 #Si più non ce la fa!!
+betchSize = 32 #Si più non ce la fa!!
 
 
 print(f'⚠️ Training set size: {len(trainSet)} with betch: {betchSize}')
@@ -136,10 +169,10 @@ trainerUNet = MyTrainer(
     test_loader=testLoader,
     validation_loader=validationLoader,
     optimizer=optimizerUNet,
-    scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=6), 
-    loss_fn= Losses(MSE=0.8, FL=0.5, SSIM=1).MSE_SSIM_FL(),
-    num_epochs=12,
-    modelName="UNet_MSE_SSIM_FL_Residual",
+    scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=4), 
+    loss_fn= Losses(MSE=0.8, FL=1, SSIM=1).MSE_SSIM_FL(),
+    num_epochs=8,
+    modelName="UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle",
     best_model=True,
     betchTrainingValidationPrint=25,
     evalMetrich=[structural_similarity, peak_signal_noise_ratio]
