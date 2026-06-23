@@ -172,12 +172,13 @@ trainerUNet = MyTrainer(
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=4), 
     loss_fn= Losses(MSE=0.8, FL=1, SSIM=1).MSE_SSIM_FL(),
     num_epochs=8,
-    modelName="UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle",
+    modelName="DeleteTest",
     best_model=True,
     betchTrainingValidationPrint=25,
-    evalMetrich=[structural_similarity, peak_signal_noise_ratio]
+    evalMetrich=[structural_similarity, peak_signal_noise_ratio],
     # It compares local image patches in terms of luminance, contrast, and structure, and is therefore much more sensitive to structural distortions. SSIM usually takes values between 0 and 1, where values closer to 1 indicate higher similarity.
     # A larger PSNR corresponds to a smaller pixel-wise error. It remains a pixel-wise fidelity measure.
+    resultRoot="./ResultsEtE"
     )
 
 

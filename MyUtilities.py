@@ -3,7 +3,7 @@ import os
 from PIL import Image
 from torchvision import transforms
 from torch.utils.data import Dataset
-from IPPy import utilities 
+from IPPy import utilities
 import torch
 import matplotlib.pyplot as plt
 from torch import nn
@@ -36,7 +36,7 @@ class MayoDataset(Dataset):
         return hResolution, lResolution
     
 class MyTrainer():
-    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, modelName="model", validation_loader=None, test_loader=None, best_model=False, betchTrainingValidationPrint = 5, evalMetrich = []):
+    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, modelName="model", validation_loader=None, test_loader=None, best_model=False, betchTrainingValidationPrint = 5, evalMetrich = [], resultRoot="./Results"):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model = model
         model.to(self.device)
@@ -54,6 +54,7 @@ class MyTrainer():
         self.evalMetrich = evalMetrich
         self.modelEvaluationOnTest = []
         self.modelEvaluationOnImages = []
+        self.resultRoot = resultRoot
 
     def evaluate(self, samples, grad = False):
         x, y = samples # (x, y): x = grandTruth, y = LowResolution x = [x1,x2,x3....], y = [y1,y2,y3....]
@@ -168,10 +169,11 @@ class MyTrainer():
                         # If the current cumulative validation loss is the minimum validation loss them save this model
                         if self.best_model and  avarageValidationLoss < currentBestModelValidationLoss:
                             print()
-                            print(f'⏬: Saving best model: ./Results/{self.modelName}: {avarageValidationLoss}', end='\r')
+                            print(f'⏬: Saving best model: {os.path.join(self.resultRoot, self.modelName)}: {avarageValidationLoss}', end='\r')
                             print()
                             currentBestModelValidationLoss = avarageValidationLoss
-                            torch.save(self.model.state_dict(), f'./Results/{self.modelName}.pth')
+                            os.makedirs(self.resultRoot, exist_ok=True)
+                            torch.save(self.model.state_dict(), os.path.join(self.resultRoot, f'{self.modelName}.pth'))
 
                         validation_Loss_history.append(avarageValidationLoss)
 
@@ -186,8 +188,9 @@ class MyTrainer():
                     ax.relim()
                     ax.autoscale_view()
 
-                    fig.savefig(f"./Results/{self.modelName}_Training_Loss_Plot.png")
-                    print(f'✅: Saved loss plot: ./Results/{self.modelName}_Training_Loss_Plot.png', end='\r')
+                    os.makedirs(self.resultRoot, exist_ok=True)
+                    fig.savefig(os.path.join(self.resultRoot, f'{self.modelName}_Training_Loss_Plot.png'))
+                    print(f'✅: Saved loss plot: {os.path.join(self.resultRoot, f"{self.modelName}_Training_Loss_Plot.png")}', end='\r')
                     print()
 
             self.scheduler.step()
@@ -243,11 +246,11 @@ class MyTrainer():
             self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_Training loss': metric_value})
 
         # Save prediction and target as images
-        os.makedirs('Results', exist_ok=True)
+        os.makedirs(self.resultRoot, exist_ok=True)
         pred_img = transforms.ToPILImage()(prediction.cpu())
         target_img = transforms.ToPILImage()(target.cpu())
-        pred_path = os.path.join('Results', 'prediction.png') #⚠️⚠️⚠️ Fix
-        target_path = os.path.join('Results', 'target.png') #⚠️⚠️⚠️ Fix
+        pred_path = os.path.join(self.resultRoot, 'prediction.png')
+        target_path = os.path.join(self.resultRoot, 'target.png')
         pred_img.save(pred_path)
         target_img.save(target_path)
 
@@ -256,7 +259,7 @@ class MyTrainer():
 
     def logTrain(self):
 
-        os.makedirs('Results', exist_ok=True)
+        os.makedirs(self.resultRoot, exist_ok=True)
         # Prepare serializable representations
         loss_fn_name = self.loss_fn.__name__ if self.loss_fn is not None else None
         scheduler_name = type(self.scheduler).__name__ if self.scheduler is not None else None
@@ -278,7 +281,7 @@ class MyTrainer():
             'modelEvaluationOnImages': self.modelEvaluationOnImages
         }
 
-        json_path = os.path.join('Results', f'{self.modelName}.json')
+        json_path = os.path.join(self.resultRoot, f'{self.modelName}.json')
         import json
         with open(json_path, 'w', encoding='utf-8') as f:
             json.dump(meta, f, indent=4, ensure_ascii=False)
