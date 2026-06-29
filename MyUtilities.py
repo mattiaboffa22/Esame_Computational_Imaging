@@ -3,19 +3,26 @@ import os
 from PIL import Image
 from torchvision import transforms
 from torch.utils.data import Dataset
-from IPPy import utilities
+from IPPy import operators, utilities
 import torch
 import matplotlib.pyplot as plt
 from torch import nn
 
 class MayoDataset(Dataset):
-    def __init__(self, data_path, data_shape_HR, data_shape_LR, noise_level=0.1):
+    def __init__(self, data_path, data_shape_HR, data_shape_LR, noise_level=0.1, downscale_factor=2):
         super().__init__()
         self.data_path = data_path
-        self.data_shape_HR = data_shape_HR
-        self.data_shape_LR = data_shape_LR
+        self.data_shape_HR = data_shape_HR if isinstance(data_shape_HR, tuple) else (data_shape_HR, data_shape_HR)
+        self.data_shape_LR = data_shape_LR if isinstance(data_shape_LR, tuple) else (data_shape_LR, data_shape_LR)
         self.noise_level = noise_level
         self.fname_list = glob.glob(f'{data_path}/*/*.png')
+        self.downscale_factor = downscale_factor
+
+        
+        self.downscaler = operators.DownScaling(
+            img_shape=self.data_shape_HR,
+            downscale_factor=downscale_factor,
+        )
 
     def __len__(self):
         return len(self.fname_list)
@@ -28,7 +35,7 @@ class MayoDataset(Dataset):
             transforms.Resize(self.data_shape_HR), 
         ])(hResolution)
 
-        lResolution = transforms.Resize(self.data_shape_LR)(hResolution) #Downsampling dell'immagine ad alta risoluzione 
+        lResolution = self.downscaler(hResolution.unsqueeze(0)).squeeze(0)
         with torch.no_grad():
             lResolution += utilities.gaussian_noise(lResolution, self.noise_level) #Aggiunta di rumore gaussiano all'immagine a bassa risoluzione ⚠️⚠️⚠️
         lResolution = transforms.Resize(self.data_shape_HR)(lResolution) #Upsampling dell'immagine a bassa risoluzione alla stessa dimensione dell'immagine ad alta risoluzione

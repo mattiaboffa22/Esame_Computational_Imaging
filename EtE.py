@@ -144,9 +144,9 @@ class UNet(nn.Module):
         # --- Output Finale ---
         return x - self.final_conv(up3) # X = Y + n => X - Y = n
     
-dataSetTrain = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
+dataSetTrain = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005, downscale_factor=2)
 trainSet, validationSet = train_test_split(dataSetTrain, test_size=0.15, random_state=42)
-testSet = MayoDataset(data_path='./Mayo/test', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005)
+testSet = MayoDataset(data_path='./Mayo/test', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005, downscale_factor=2)
 betchSize = 32 #Si più non ce la fa!!
 
 
@@ -159,7 +159,7 @@ validationLoader = DataLoader(validationSet, batch_size=betchSize, shuffle=True)
 testLoader = DataLoader(testSet, batch_size=betchSize, shuffle=True)
 
 modelResidualUNet = UNet(in_channels=1, out_channels=1) 
-#modelUNet.load_state_dict(torch.load('./Results/UNet_MSE_SSIM_FL_0.1.pth'))
+modelResidualUNet.load_state_dict(torch.load('./ResultsEtE/UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle.pth'))
 
 optimizerUNet = torch.optim.Adam(modelResidualUNet.parameters(), lr=5e-4)
 
@@ -182,8 +182,8 @@ trainerUNet = MyTrainer(
     )
 
 
-trainerUNet.train()
 trainerUNet.test()
 print('Test on image: ', trainerUNet.testOnImage(path='./267.png', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005))
+#trainerUNet.train()
 
 
