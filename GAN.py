@@ -1,4 +1,3 @@
-from asyncio import sleep
 import glob
 import math
 from PIL import Image
@@ -12,6 +11,7 @@ from tqdm.auto import tqdm
 from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 from IPPy import operators, utilities
+from torch.cuda.amp import autocast, GradScaler
 
 device = utilities.get_device()
 print(f'🚨 Device: {device}')
@@ -149,21 +149,26 @@ def update_ema(ema_model, model, decay=0.999):
         ema_buffer.copy_(buffer)
 
 torch.manual_seed(0)
+
 latent_dim = 128
 G = StableGenerator(latent_dim=latent_dim).to(device)
 G_ema = StableGenerator(latent_dim=latent_dim).to(device)
 G_ema.load_state_dict(G.state_dict())
 C = StableCritic().to(device)
 
-opt_G = torch.optim.Adam(G.parameters(), lr=4e-4, betas=(0.0, 0.99))
-opt_C = torch.optim.Adam(C.parameters(), lr=3e-4, betas=(0.0, 0.99))
-plotGraph = 2 # Every 5 epochs there is a plot
-G_to_C = 1 # For 2 Generator train step there is a critic train step 
+opt_G = torch.optim.Adam(G.parameters(), lr=3e-4, betas=(0.0, 0.99))
+opt_C = torch.optim.Adam(C.parameters(), lr=5e-5, betas=(0.0, 0.99))
+plotGraph = 2  # Every 5 epochs there is a plot
+G_to_C = 1     # For 2 Generator train step there is a critic train step
 num_epochs = 50
 ema_decay = 0.999
-r1_weight = 5.0
+r1_weight = 5
 r1_every = 16
 fixed_z = torch.randn(8, latent_dim, device=device)
+
+# --- AMP: uno scaler per ciascun optimizer, dato che i due step sono indipendenti ---
+scaler_G = GradScaler()
+scaler_C = GradScaler()
 
 g_path = weights_dir / 'GAN_G.pth'
 g_ema_path = weights_dir / 'GAN_G_EMA.pth'
@@ -171,7 +176,7 @@ c_path = weights_dir / 'GAN_C.pth'
 g_history, c_history = [], []
 
 #------------------------------------------------------------------------------------------
-if(False):
+if(True):
     reloaded_G = StableGenerator(latent_dim=latent_dim)
     reloaded_G.load_state_dict(torch.load(g_ema_path, map_location='cpu', weights_only=True))
     reloaded_G = reloaded_G.to(device)
@@ -225,11 +230,11 @@ if(False):
     y_delta =  y_clean + noise * torch.randn_like(y_clean)
 
     x_gan_dps = gan_dps_reconstruct(
-        G, 
+        reloaded_G, 
         y_delta, 
         K = k,
         latent_dim=128,
-        sigma_y=noise, num_steps=1000, eta=1e-2, device=device
+        sigma_y=noise, num_steps=10000, eta=1e-2, device=device
     )
 
     def denorm(x):
@@ -267,15 +272,19 @@ for epoch in range(num_epochs):
     progress_bar = tqdm(train_loader, desc=f'GAN epoch {epoch + 1}/{num_epochs}', leave=True)
 
     for step, x_real in enumerate(progress_bar, start=1):
-        x_real = x_real.to(device)
+        x_real = x_real.to(device, non_blocking=True)
         batch_size = x_real.shape[0]
 
-        z = torch.randn(batch_size, latent_dim, device=device)
-        x_fake = G(z)
-        c_real = C(x_real)
-        c_fake = C(x_fake.detach())
-        c_loss = F.relu(1.0 - c_real).mean() + F.relu(1.0 + c_fake).mean()
+        # ============== CRITIC STEP ==============
+        with autocast():
+            z = torch.randn(batch_size, latent_dim, device=device)
+            x_fake = G(z)
+            c_real = C(x_real)
+            c_fake = C(x_fake.detach())
+            c_loss = F.relu(1.0 - c_real).mean() + F.relu(1.0 + c_fake).mean()
 
+        # R1 penalty: tenuta fuori da autocast, in fp32 puro.
+        # create_graph=True (doppio backward) è numericamente fragile in fp16.
         if step % r1_every == 0:
             x_real_reg = x_real.detach().requires_grad_(True)
             c_real_reg = C(x_real_reg)
@@ -288,17 +297,22 @@ for epoch in range(num_epochs):
             c_loss = c_loss + 0.5 * r1_weight * r1_penalty
 
         if step % G_to_C == 0:
-            opt_C.zero_grad()
-            c_loss.backward()
-            opt_C.step()
+            opt_C.zero_grad(set_to_none=True)
+            scaler_C.scale(c_loss).backward()
+            scaler_C.step(opt_C)
+            scaler_C.update()
 
-        z = torch.randn(batch_size, latent_dim, device=device)
-        x_fake = G(z)
-        g_loss = -C(x_fake).mean()
+        # ============== GENERATOR STEP ==============
+        with autocast():
+            z = torch.randn(batch_size, latent_dim, device=device)
+            x_fake = G(z)
+            g_loss = -C(x_fake).mean()
 
-        opt_G.zero_grad()
-        g_loss.backward()
-        opt_G.step()
+        opt_G.zero_grad(set_to_none=True)
+        scaler_G.scale(g_loss).backward()
+        scaler_G.step(opt_G)
+        scaler_G.update()
+
         update_ema(G_ema, G, decay=ema_decay)
 
         g_epoch += g_loss.item()
