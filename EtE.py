@@ -3,10 +3,7 @@ import torch
 from torch.nn import functional as F
 from MyUtilities import MayoDataset, Losses, MyTrainer
 from torch.utils.data import DataLoader
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from sklearn.model_selection import train_test_split
-
-# ⚠️ Receptive Field: 44*44
 
 #class DoubleConv(nn.Module):
 #    def __init__(self, in_channels, out_channels):
@@ -143,11 +140,47 @@ class UNet(nn.Module):
 
         # --- Output Finale ---
         return x - self.final_conv(up3) # X = Y + n => X - Y = n
-    
-dataSetTrain = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005, downscale_factor=2)
+
+
+# =====================================================================
+# 🔧 CONFIGURAZIONE
+# =====================================================================
+
+# --- Variante 1: rumore 0.005, scale 2 (già allenato) ---
+# NOISE_LEVEL = 0.005
+# SCALE = 2
+# MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise005_scale2"
+# LOAD_WEIGHTS = './ResultsEtE/UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise005_scale2.pth'
+# DO_TRAIN = False   # è già allenato, vuoi solo testarlo
+
+# --- Variante 2: rumore 0.01, scale 2 (già allenato) ---
+#NOISE_LEVEL = 0.01
+#SCALE = 2
+#MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise01_scale2"
+#LOAD_WEIGHTS = './ResultsEtE/UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise01_scale2.pth'
+#DO_TRAIN = False
+
+# --- Variante 3: rumore 0.005, scale 4 (già allenato) ---
+#NOISE_LEVEL = 0.005
+#SCALE = 4
+#MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise005_scale4"
+#LOAD_WEIGHTS = None
+#DO_TRAIN = True
+
+# --- Variante 4: rumore 0.01, scale 4 (già allenato) ---
+NOISE_LEVEL = 0.01
+SCALE = 4
+MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise01_scale4"
+LOAD_WEIGHTS = None
+DO_TRAIN = True
+
+# =====================================================================
+
+
+dataSetTrain = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=NOISE_LEVEL, downscale_factor=SCALE)
 trainSet, validationSet = train_test_split(dataSetTrain, test_size=0.15, random_state=42)
-testSet = MayoDataset(data_path='./Mayo/test', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005, downscale_factor=2)
-betchSize = 32 #Si più non ce la fa!!
+testSet = MayoDataset(data_path='./Mayo/test', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=NOISE_LEVEL, downscale_factor=SCALE)
+betchSize = 8 #PC Mattia si può mettere a 32, PC Pietro và messo a 8
 
 
 print(f'⚠️ Training set size: {len(trainSet)} with betch: {betchSize}')
@@ -159,7 +192,8 @@ validationLoader = DataLoader(validationSet, batch_size=betchSize, shuffle=True)
 testLoader = DataLoader(testSet, batch_size=betchSize, shuffle=True)
 
 modelResidualUNet = UNet(in_channels=1, out_channels=1) 
-modelResidualUNet.load_state_dict(torch.load('./ResultsEtE/UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle.pth'))
+if LOAD_WEIGHTS is not None:
+    modelResidualUNet.load_state_dict(torch.load(LOAD_WEIGHTS))
 
 optimizerUNet = torch.optim.Adam(modelResidualUNet.parameters(), lr=5e-4)
 
@@ -172,18 +206,16 @@ trainerUNet = MyTrainer(
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=4), 
     loss_fn= Losses(MSE=0.8, FL=1, SSIM=1).MSE_SSIM_FL(),
     num_epochs=8,
-    modelName="DeleteTest",
+    modelName=MODEL_NAME,
     best_model=True,
     betchTrainingValidationPrint=25,
-    evalMetrich=[structural_similarity, peak_signal_noise_ratio],
-    # It compares local image patches in terms of luminance, contrast, and structure, and is therefore much more sensitive to structural distortions. SSIM usually takes values between 0 and 1, where values closer to 1 indicate higher similarity.
-    # A larger PSNR corresponds to a smaller pixel-wise error. It remains a pixel-wise fidelity measure.
     resultRoot="./ResultsEtE"
-    )
+)
 
+if DO_TRAIN:
+    trainerUNet.train()
 
 trainerUNet.test()
-print('Test on image: ', trainerUNet.testOnImage(path='./267.png', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=0.005))
-#trainerUNet.train()
+print('Test on image: ', trainerUNet.testOnImage(path='./267.png', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=NOISE_LEVEL))
 
 

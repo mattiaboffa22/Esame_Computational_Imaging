@@ -1,0 +1,28 @@
+{
+    "num_epochs": 8,
+    "loss_fn": "MSE_SSIM_FL",
+    "scheduler": "CosineAnnealingLR",
+    "best_model": true,
+    "betchTrainingValidationPrint": 25,
+    "loss_params": {
+        "FL": 1,
+        "SSIM": 1,
+        "MSE": 0.8
+    },
+    "modelEvaluationOnTest": [
+        {
+            "structural_similarity": 0.9220221851073741
+        },
+        {
+            "peak_signal_noise_ratio": 34.70005208878956
+        }
+    ],
+    "modelEvaluationOnImages": [
+        {
+            "./267.png_(128, 128)_to_(256, 256)_structural_similarity": 0.9283258513827324
+        },
+        {
+            "./267.png_(128, 128)_to_(256, 256)_peak_signal_noise_ratio": 31.411118743539717
+        }
+    ]
+}
