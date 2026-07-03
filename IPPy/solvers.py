@@ -340,6 +340,7 @@ class ChambollePockTpVUnconstrained:
         maxiter: int = 100,
         p: int = 1,
         verbose: bool = False,
+        device: torch.device | None = None,
         *args,
         **kwargs,
     ):
@@ -376,10 +377,11 @@ class ChambollePockTpVUnconstrained:
             x = torch.zeros((1, 1, self.nx, self.ny))
         else:
             x = starting_point
-        y = torch.zeros((1, 1, self.mx, self.my))
-        w = torch.zeros((1, 2, self.nx, self.ny))
+        y = torch.zeros((1, 1, self.mx, self.my)).to(device)
+        w = torch.zeros((1, 2, self.nx, self.ny)).to(device)
 
         xx = x
+        xx = xx.to(device)
 
         # Initialize infos
         info = dict()
