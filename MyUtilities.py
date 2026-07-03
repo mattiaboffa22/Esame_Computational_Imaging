@@ -7,6 +7,7 @@ from IPPy import operators, utilities
 import torch
 import matplotlib.pyplot as plt
 from torch import nn
+from IPPy.utilities.metrics import PSNR, SSIM
 
 class MayoDataset(Dataset):
     def __init__(self, data_path, data_shape_HR, data_shape_LR, noise_level=0.1, downscale_factor=2):
@@ -43,7 +44,7 @@ class MayoDataset(Dataset):
         return hResolution, lResolution
     
 class MyTrainer():
-    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, modelName="model", validation_loader=None, test_loader=None, best_model=False, betchTrainingValidationPrint = 5, evalMetrich = [], resultRoot="./Results"):
+    def __init__(self, model, train_loader, optimizer, num_epochs, scheduler, loss_fn=torch.nn.MSELoss(), saveModel=False, modelName="model", validation_loader=None, test_loader=None, best_model=False, betchTrainingValidationPrint = 5, resultRoot="./Results"):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         self.model = model
         model.to(self.device)
@@ -58,7 +59,6 @@ class MyTrainer():
         self.validation_loader = validation_loader
         self.best_model = best_model
         self.betchTrainingValidationPrint = betchTrainingValidationPrint
-        self.evalMetrich = evalMetrich
         self.modelEvaluationOnTest = []
         self.modelEvaluationOnImages = []
         self.resultRoot = resultRoot
@@ -78,49 +78,38 @@ class MyTrainer():
         return loss, y, x_pred
 
     def test(self): 
-        metrics_names = ', '.join([m.__name__ for m in self.evalMetrich]) if self.evalMetrich else "Loss function"
-        print(f'🔄️ :Testing=> {metrics_names}')
+        print(f'🔄️ :Testing')
         if not self.test_loader:
             print(f'🚨 No one test set.')
             return
+        
+        # Esegui tutte le metriche di valutazione [PSNR e SSIM] sul test set
+        metric_cumulative = {PSNR: 0.0, SSIM: 0.0}
 
-        if self.evalMetrich:
-            # Esegui tutte le metriche di valutazione
-            metric_cumulative = {m.__name__: 0.0 for m in self.evalMetrich}
-            samplesCounter = 0
+        for testIndex, testSamples in enumerate(self.test_loader):
+            print(f'🔁 : test batch: {testIndex}', end='\r')
+            print()
+            _, _, modelPredictions = self.evaluate(testSamples, grad=False)
 
-            for testIndex, testSamples in enumerate(self.test_loader):
-                print(f'🔁 : test batch: {testIndex}', end='\r')
-                test_Loss, _, modelPredictions = self.evaluate(testSamples, grad=False)
+            for i in range(len(modelPredictions)):
+                x = testSamples[0][i].unsqueeze(0).to(self.device)  # GrandTruth
+                x_pred_sample = modelPredictions[i].unsqueeze(0).to(self.device)  # Predizione del modello
 
-                for i in range(len(modelPredictions)):
-                    x = testSamples[0][i].cpu().numpy()
-                    x_pred_sample = modelPredictions[i].cpu().numpy()
+                psnr = PSNR(x_pred_sample, x)
+                ssim = SSIM(x_pred_sample, x)
+                print(f"🔄️: PSNR: {psnr:.2f} dB | SSIM: {ssim:.4f}", end='\r')
 
-                    for metric_fn in self.evalMetrich:
-                        x_metric = x.squeeze() if metric_fn.__name__ == 'structural_similarity' else x
-                        x_pred_metric = x_pred_sample.squeeze() if metric_fn.__name__ == 'structural_similarity' else x_pred_sample
-                        metric_cumulative[metric_fn.__name__] += metric_fn(x_metric, x_pred_metric, data_range=1.0)
+                metric_cumulative[PSNR] += psnr
+                metric_cumulative[SSIM] += ssim
                     
-                    samplesCounter += 1
+        # Calcola la media delle metriche sul test set
+        num_samples = len(self.test_loader.dataset)
+        avg_psnr = metric_cumulative[PSNR] / num_samples
+        avg_ssim = metric_cumulative[SSIM] / num_samples
 
-            # Calcola e registra le medie per tutte le metriche
-            for metric_fn in self.evalMetrich:
-                metric_name = metric_fn.__name__
-                avg = metric_cumulative[metric_name] / samplesCounter
-                self.modelEvaluationOnTest.append({metric_name: avg})
-                print(f'⚠️: Average {metric_name} on Test Set: {avg:.4f}')
-        else:
-            # Usa la funzione di perdita come fallback
-            CumulativeEvaluation = 0.0
-            for testIndex, testSamples in enumerate(self.test_loader):
-                print(f'🔁 : test batch: {testIndex}', end='\r')
-                test_Loss, _, _ = self.evaluate(testSamples, grad=False)
-                CumulativeEvaluation += test_Loss.item()
-
-            avg = CumulativeEvaluation / len(self.test_loader)
-            self.modelEvaluationOnTest.append({"Loss function": avg})
-            print(f'⚠️: Average Loss function on Test Set: {avg:.4f}')
+        self.modelEvaluationOnTest.append({'PSNR': avg_psnr, 'SSIM': avg_ssim})
+        print(f'✅: Average PSNR on Test Set: {avg_psnr:.4f}')
+        print(f'✅: Average SSIM on Test Set: {avg_ssim:.4f}')
 
         self.logTrain()
 
@@ -227,42 +216,29 @@ class MyTrainer():
         lResolution = transforms.Resize(data_shape_HR)(lResolution) #Upsampling dell'immagine a bassa risoluzione alla stessa dimensione dell'immagine ad alta risoluzione
 
         # Esegui il modello sull'immagine lResolution e confronta il risultato con hResolution
-        #self.model.eval()
+        self.model.eval()
         with torch.no_grad():
             lResolution = lResolution.unsqueeze(0).to(self.device)
             hResolution = hResolution.unsqueeze(0).to(self.device)
             prediction = self.model(lResolution)
 
-        prediction = prediction.squeeze(0)
-        target = hResolution.squeeze(0)
+        psnr = PSNR(prediction, hResolution)
+        ssim = SSIM(prediction, hResolution)
 
-        x_pred_np = prediction.cpu().numpy()
-        target_np = target.cpu().numpy()
-
-        if self.evalMetrich:
-            # Esegui tutte le metriche di valutazione
-            for metric_fn in self.evalMetrich:
-                x_pred_metric = x_pred_np.squeeze() if metric_fn.__name__ == 'structural_similarity' else x_pred_np
-                target_metric = target_np.squeeze() if metric_fn.__name__ == 'structural_similarity' else target_np
-                metric_value = metric_fn(target_metric, x_pred_metric, data_range=1.0)
-                metric_name = metric_fn.__name__
-                self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_{metric_name}': metric_value})
-        else:
-            # Usa la funzione di perdita come fallback
-            metric_value = self.loss_fn(prediction.unsqueeze(0), hResolution).item()
-            self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_Training loss': metric_value})
+        self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_PSNR': psnr})
+        self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_SSIM': ssim})
 
         # Save prediction and target as images
         os.makedirs(self.resultRoot, exist_ok=True)
-        pred_img = transforms.ToPILImage()(prediction.cpu())
-        target_img = transforms.ToPILImage()(target.cpu())
+        pred_img = transforms.ToPILImage()(prediction.squeeze().cpu())
+        target_img = transforms.ToPILImage()(hResolution.squeeze().cpu())
         pred_path = os.path.join(self.resultRoot, 'prediction.png')
         target_path = os.path.join(self.resultRoot, 'target.png')
         pred_img.save(pred_path)
         target_img.save(target_path)
 
         self.logTrain()
-        return metric_value if self.evalMetrich else metric_value
+        return f'PSNR: {psnr} | SSIM: {ssim}'
 
     def logTrain(self):
 
@@ -294,7 +270,6 @@ class MyTrainer():
             json.dump(meta, f, indent=4, ensure_ascii=False)
         return json_path
         
-
 class FourierLoss(nn.Module):
     def forward(self, x, y):
         fx = torch.fft.fft2(x, norm='ortho')

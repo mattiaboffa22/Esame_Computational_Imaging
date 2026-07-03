@@ -12,6 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 import torch.nn.functional as F
 from IPPy import operators, utilities
 from torch.cuda.amp import autocast, GradScaler
+from IPPy.utilities.metrics import PSNR, SSIM
 
 device = utilities.get_device()
 print(f'🚨 Device: {device}')
@@ -234,7 +235,7 @@ if(True):
         y_delta, 
         K = k,
         latent_dim=128,
-        sigma_y=noise, num_steps=10000, eta=1e-2, device=device
+        sigma_y=noise, num_steps=1000, eta=1e-2, device=device
     )
 
     def denorm(x):
@@ -260,6 +261,10 @@ if(True):
 
     plt.tight_layout()
     plt.show()
+
+    psnr = PSNR(x_gan_dps, sample_image)
+    ssim = SSIM(x_gan_dps, sample_image)
+    print(f"\nPSNR: {psnr:.2f} dB | SSIM: {ssim:.4f}")
 
     exit()
 #------------------------------------------------------------------------------------------

@@ -473,8 +473,8 @@ class ChambollePockTpVUnconstrained:
                 formatted_time = f"{int(hours):02}:{int(minutes):02}:{int(seconds):02}"
 
                 print(
-                    f"({formatted_time}) Iteration {k}/{maxiter} -> RE: {info['RE'][k-1, 0]:0.4f}, SSIM: {info['SSIM'][k-1, 0]:0.4f}."
-                )
+                    f"({formatted_time}) Iteration {k}/{maxiter} -> RE: {info['RE'][k-1, 0]:0.4f}, SSIM: {info['SSIM'][k-1, 0]:0.4f}. -> p {p}"
+                , end='\r')
 
         # Save number of iterations in info and truncate
         info["residues"] = info["residues"][:k]
