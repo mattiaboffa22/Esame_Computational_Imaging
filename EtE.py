@@ -2,7 +2,7 @@ from torch import nn
 import torch
 from torch.nn import functional as F
 from MyUtilities import MayoDataset, Losses, MyTrainer
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from sklearn.model_selection import train_test_split
 
 #class DoubleConv(nn.Module):
@@ -145,42 +145,32 @@ class UNet(nn.Module):
 # =====================================================================
 # 🔧 CONFIGURAZIONE
 # =====================================================================
+DO_TRAIN = False
+NOISE_LEVEL = [0.01, 0.005][0]
+SCALE = [4, 2][0]
 
 # --- Variante 1: rumore 0.005, scale 2 (già allenato) ---
-# NOISE_LEVEL = 0.005
-# SCALE = 2
-# MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise005_scale2"
-# LOAD_WEIGHTS = './ResultsEtE/UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise005_scale2.pth'
-# DO_TRAIN = False   # è già allenato, vuoi solo testarlo
+#MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise005_scale2"
+
 
 # --- Variante 2: rumore 0.01, scale 2 (già allenato) ---
-#NOISE_LEVEL = 0.01
-#SCALE = 2
 #MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise01_scale2"
-#LOAD_WEIGHTS = './ResultsEtE/UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise01_scale2.pth'
-#DO_TRAIN = False
 
 # --- Variante 3: rumore 0.005, scale 4 (già allenato) ---
-#NOISE_LEVEL = 0.005
-#SCALE = 4
 #MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise005_scale4"
-#LOAD_WEIGHTS = None
-#DO_TRAIN = True
 
 # --- Variante 4: rumore 0.01, scale 4 (già allenato) ---
-NOISE_LEVEL = 0.01
-SCALE = 4
 MODEL_NAME = "UNet_MSE_SSIM_FL_Residual_Attention_PixelShuffle_noise01_scale4"
-LOAD_WEIGHTS = None
-DO_TRAIN = True
 
+
+LOAD_WEIGHTS = f'./ResultsEtE/{MODEL_NAME}.pth'
 # =====================================================================
 
 
-dataSetTrain = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=NOISE_LEVEL, downscale_factor=SCALE)
+dataSetTrain = MayoDataset(data_path='./Mayo/train', data_shape_HR=(256, 256), noise_level=NOISE_LEVEL, downscale_factor=SCALE)
 trainSet, validationSet = train_test_split(dataSetTrain, test_size=0.15, random_state=42)
-testSet = MayoDataset(data_path='./Mayo/test', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=NOISE_LEVEL, downscale_factor=SCALE)
-betchSize = 8 #PC Mattia si può mettere a 32, PC Pietro và messo a 8
+testSet = MayoDataset(data_path='./Mayo/test', data_shape_HR=(256, 256), noise_level=NOISE_LEVEL, downscale_factor=SCALE)
+betchSize = 32 #PC Mattia si può mettere a 32, PC Pietro và messo a 8
 
 
 print(f'⚠️ Training set size: {len(trainSet)} with betch: {betchSize}')
@@ -189,7 +179,10 @@ print(f'⚠️ Validation set size: {len(validationSet)} with betch: {betchSize}
 
 trainLoader = DataLoader(trainSet, batch_size=betchSize, shuffle=True)
 validationLoader = DataLoader(validationSet, batch_size=betchSize, shuffle=True)
-testLoader = DataLoader(testSet, batch_size=betchSize, shuffle=True)
+testLoader = DataLoader(testSet, batch_size=betchSize, shuffle=False) 
+#Costruisco un altro DataLoader con un solo batch di 32 elementi
+testLoaderSingleBatch = DataLoader(Subset(testSet, range(betchSize)), batch_size=32, shuffle=False)
+
 
 modelResidualUNet = UNet(in_channels=1, out_channels=1) 
 if LOAD_WEIGHTS is not None:
@@ -200,7 +193,7 @@ optimizerUNet = torch.optim.Adam(modelResidualUNet.parameters(), lr=5e-4)
 trainerUNet = MyTrainer(
     model=modelResidualUNet, 
     train_loader=trainLoader, 
-    test_loader=testLoader,
+    test_loader=testLoaderSingleBatch, #⚠️⚠️⚠️
     validation_loader=validationLoader,
     optimizer=optimizerUNet,
     scheduler=torch.optim.lr_scheduler.CosineAnnealingLR(optimizerUNet, T_max=4), 
@@ -215,7 +208,7 @@ trainerUNet = MyTrainer(
 if DO_TRAIN:
     trainerUNet.train()
 
+print('Test on image: ', trainerUNet.testOnImage(path='./0.png', data_shape_HR=(256, 256), downscale_factor=SCALE, noise_level=NOISE_LEVEL))
 trainerUNet.test()
-print('Test on image: ', trainerUNet.testOnImage(path='./267.png', data_shape_HR=(256, 256), data_shape_LR=(128, 128), noise_level=NOISE_LEVEL))
 
 

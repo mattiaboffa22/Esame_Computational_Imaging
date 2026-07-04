@@ -1,5 +1,7 @@
 import glob
+import json
 import math
+import os
 from PIL import Image
 from matplotlib import pyplot as plt
 from pathlib import Path
@@ -13,6 +15,8 @@ import torch.nn.functional as F
 from IPPy import operators, utilities
 from torch.cuda.amp import autocast, GradScaler
 from IPPy.utilities.metrics import PSNR, SSIM
+from IPPy.utilities import load_image, save_image, normalize
+
 
 device = utilities.get_device()
 print(f'🚨 Device: {device}')
@@ -223,48 +227,86 @@ if(True):
         with torch.no_grad():
             return G(z).clamp(-1.0, 1.0).detach()
 
-    k = operators.DownScaling(img_shape=(256,256), downscale_factor=2)
-    noise = 0.005
-
-    sample_image = test_dataset[0].unsqueeze(0).to(device)
-    y_clean = k(sample_image)
-    y_delta =  y_clean + noise * torch.randn_like(y_clean)
-
-    x_gan_dps = gan_dps_reconstruct(
-        reloaded_G, 
-        y_delta, 
-        K = k,
-        latent_dim=128,
-        sigma_y=noise, num_steps=1000, eta=1e-2, device=device
-    )
-
     def denorm(x):
         return (x.clamp(-1.0, 1.0) + 1.0) / 2.0
+    
+    downscale_factor = 2
+    k = operators.DownScaling(img_shape=(256,256), downscale_factor=downscale_factor)
+    noise = [0.005, 0.01]
+    x_test = next(iter(test_loader)).to(device)
+    iteration = 1000
 
+    GlobalResults = {
+        noise_level: {'psnr': 0.0, 'ssim': 0.0} for noise_level in noise
+    }
+    GlobalResults['iteration'] = iteration
 
-    fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+    sample_image = transforms.Resize((256, 256))(transforms.ToTensor()(Image.open('./0.png').convert('L'))).unsqueeze(0).to(device)
+    y_clean = k(sample_image)
+    
+    # Esegui la valutazione per ciascun livello di rumore sull'immagine di esempio
+    for n in noise:
+        y_delta =  y_clean + n * torch.randn_like(y_clean)
 
-    # 1. Immagine vera (ground truth), alta risoluzione
-    axes[0].imshow(denorm(sample_image).cpu().squeeze(), cmap='gray')
-    axes[0].set_title('Ground truth (256×256)')
-    axes[0].axis('off')
+        x_gan_dps = gan_dps_reconstruct(
+            reloaded_G, 
+            y_delta, 
+            K = k,
+            latent_dim=128,
+            sigma_y=n, num_steps=2000, eta=1e-2, device=device
+        )
 
-    # 2. Osservazione corrotta y_delta, bassa risoluzione
-    axes[1].imshow(denorm(y_delta).cpu().squeeze(), cmap='gray')
-    axes[1].set_title(f'Osservazione $y^\\delta$\n({y_delta.shape[-2]}×{y_delta.shape[-1]}, rumore={noise})')
-    axes[1].axis('off')
+        fig, axes = plt.subplots(1, 3, figsize=(12, 4))
 
-    # 3. Ricostruzione GAN + DPS
-    axes[2].imshow(denorm(x_gan_dps).cpu().squeeze(), cmap='gray')
-    axes[2].set_title('Ricostruzione GAN+DPS')
-    axes[2].axis('off')
+        # 1. Immagine vera (ground truth), alta risoluzione
+        axes[0].imshow(denorm(sample_image).cpu().squeeze(), cmap='gray')
+        axes[0].set_title('Ground truth (256×256)')
+        axes[0].axis('off')
 
-    plt.tight_layout()
-    plt.show()
+        # 2. Osservazione corrotta y_delta, bassa risoluzione
+        axes[1].imshow(denorm(y_delta).cpu().squeeze(), cmap='gray')
+        axes[1].set_title(f'Osservazione $y^\\delta$\n({y_delta.shape[-2]}×{y_delta.shape[-1]}, rumore={n}, scale={downscale_factor})')
+        axes[1].axis('off')
 
-    psnr = PSNR(x_gan_dps, sample_image)
-    ssim = SSIM(x_gan_dps, sample_image)
-    print(f"\nPSNR: {psnr:.2f} dB | SSIM: {ssim:.4f}")
+        # 3. Ricostruzione GAN + DPS
+        axes[2].imshow(denorm(x_gan_dps).cpu().squeeze(), cmap='gray')
+        axes[2].set_title('Ricostruzione GAN+DPS')
+        axes[2].axis('off')
+
+        plt.tight_layout()
+        plt.savefig(f'./GANSaver/Results_scale_{downscale_factor}_noise_{n}.png')
+        plt.close()
+
+    # Esegui la valutazione su un betch del testset per la raccolta delle metriche globali
+    for n in noise:
+        print(f"\n--- Valutazione Noise Level: {n} ---")
+        for x_true in x_test:
+            x_true = x_true.unsqueeze(0)  # Aggiungi dimensione batch
+            y_clean = k(x_true)
+            y_delta = y_clean + n * torch.randn_like(y_clean)
+
+            x_gan_dps = gan_dps_reconstruct(
+                reloaded_G, 
+                y_delta, 
+                K=k,
+                latent_dim=latent_dim,
+                sigma_y=n, num_steps=iteration, eta=1e-2, device=device
+            )
+
+            GlobalResults[n]['psnr'] += PSNR(x_gan_dps, x_true)
+            GlobalResults[n]['ssim'] += SSIM(x_gan_dps, x_true)
+        
+        GlobalResults[n]['psnr'] /= len(x_test)
+        GlobalResults[n]['ssim'] /= len(x_test)
+        print()
+        print(f"PSNR: {GlobalResults[n]['psnr']:.2f} dB | SSIM: {GlobalResults[n]['ssim']:.4f}")
+
+    print()
+    print(f'✅ Global Results => {GlobalResults}')
+
+    os.makedirs('./GANSaver', exist_ok=True)
+    with open(f'./GANSaver/Results_scale_{downscale_factor}.json', 'w', encoding='utf-8') as f:
+        json.dump(GlobalResults, f, indent=2)
 
     exit()
 #------------------------------------------------------------------------------------------

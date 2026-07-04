@@ -1,5 +1,5 @@
 {
-    "num_epochs": 30,
+    "num_epochs": 8,
     "loss_fn": "MSE_SSIM_FL",
     "scheduler": "CosineAnnealingLR",
     "best_model": true,
@@ -11,18 +11,16 @@
     },
     "modelEvaluationOnTest": [
         {
-            "structural_similarity": 0.9145868068661595
-        },
-        {
-            "peak_signal_noise_ratio": 33.37229306735904
+            "PSNR": 33.98330004458409,
+            "SSIM": 0.9198617559415612
         }
     ],
     "modelEvaluationOnImages": [
         {
-            "./267.png_(128, 128)_to_(256, 256)_structural_similarity": 0.9272884524393077
+            "./0.png_4_to_(256, 256)_PSNR": 34.246106946717106
         },
         {
-            "./267.png_(128, 128)_to_(256, 256)_peak_signal_noise_ratio": 29.37917052792193
+            "./0.png_4_to_(256, 256)_SSIM": 0.9211712676012516
         }
     ]
 }

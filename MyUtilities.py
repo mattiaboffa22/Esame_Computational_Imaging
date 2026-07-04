@@ -10,11 +10,10 @@ from torch import nn
 from IPPy.utilities.metrics import PSNR, SSIM
 
 class MayoDataset(Dataset):
-    def __init__(self, data_path, data_shape_HR, data_shape_LR, noise_level=0.1, downscale_factor=2):
+    def __init__(self, data_path, data_shape_HR, noise_level=0.1, downscale_factor=2):
         super().__init__()
         self.data_path = data_path
         self.data_shape_HR = data_shape_HR if isinstance(data_shape_HR, tuple) else (data_shape_HR, data_shape_HR)
-        self.data_shape_LR = data_shape_LR if isinstance(data_shape_LR, tuple) else (data_shape_LR, data_shape_LR)
         self.noise_level = noise_level
         self.fname_list = glob.glob(f'{data_path}/*/*.png')
         self.downscale_factor = downscale_factor
@@ -203,14 +202,18 @@ class MyTrainer():
         
         self.logTrain()
 
-    def testOnImage(self, path, data_shape_HR, data_shape_LR, noise_level):
+    def testOnImage(self, path, data_shape_HR, downscale_factor, noise_level):
         hResolution = Image.open(path).convert('L') 
         hResolution = transforms.Compose([ 
             transforms.ToTensor(), 
             transforms.Resize(data_shape_HR), 
         ])(hResolution)
 
-        lResolution = transforms.Resize(data_shape_LR)(hResolution) #Downsampling dell'immagine ad alta risoluzione 
+        lResolution = operators.DownScaling(
+            img_shape=data_shape_HR,
+            downscale_factor=downscale_factor,
+        )(hResolution) 
+
         with torch.no_grad():
             lResolution += utilities.gaussian_noise(lResolution, noise_level) #Aggiunta di rumore gaussiano all'immagine a bassa risoluzione ⚠️⚠️⚠️
         lResolution = transforms.Resize(data_shape_HR)(lResolution) #Upsampling dell'immagine a bassa risoluzione alla stessa dimensione dell'immagine ad alta risoluzione
@@ -225,15 +228,15 @@ class MyTrainer():
         psnr = PSNR(prediction, hResolution)
         ssim = SSIM(prediction, hResolution)
 
-        self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_PSNR': psnr})
-        self.modelEvaluationOnImages.append({f'{path}_{data_shape_LR}_to_{data_shape_HR}_SSIM': ssim})
+        self.modelEvaluationOnImages.append({f'{path}_{downscale_factor}_to_{data_shape_HR}_PSNR': psnr})
+        self.modelEvaluationOnImages.append({f'{path}_{downscale_factor}_to_{data_shape_HR}_SSIM': ssim})
 
         # Save prediction and target as images
         os.makedirs(self.resultRoot, exist_ok=True)
         pred_img = transforms.ToPILImage()(prediction.squeeze().cpu())
         target_img = transforms.ToPILImage()(hResolution.squeeze().cpu())
-        pred_path = os.path.join(self.resultRoot, 'prediction.png')
-        target_path = os.path.join(self.resultRoot, 'target.png')
+        pred_path = os.path.join(self.resultRoot, f'prediction_{self.modelName}.png')
+        target_path = os.path.join(self.resultRoot, f'target.png')
         pred_img.save(pred_path)
         target_img.save(target_path)
 

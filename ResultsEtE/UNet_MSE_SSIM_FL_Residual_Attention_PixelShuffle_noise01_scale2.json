@@ -11,18 +11,16 @@
     },
     "modelEvaluationOnTest": [
         {
-            "structural_similarity": 0.9745507047746526
-        },
-        {
-            "peak_signal_noise_ratio": 40.79836755556664
+            "PSNR": 39.77536158179164,
+            "SSIM": 0.9722746880333425
         }
     ],
     "modelEvaluationOnImages": [
         {
-            "./267.png_(128, 128)_to_(256, 256)_structural_similarity": 0.9666198960847855
+            "./0.png_2_to_(256, 256)_PSNR": 39.899702883321666
         },
         {
-            "./267.png_(128, 128)_to_(256, 256)_peak_signal_noise_ratio": 37.32279796413211
+            "./0.png_2_to_(256, 256)_SSIM": 0.9734310362167359
         }
     ]
 }
