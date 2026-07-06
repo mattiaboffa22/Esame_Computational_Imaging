@@ -1,7 +1,7 @@
 from PIL import Image
 import torch
 from IPPy import utilities, operators, solvers
-from IPPy.utilities import load_image, save_image, normalize
+from IPPy.utilities import save_image, normalize
 from IPPy.utilities.metrics import PSNR, SSIM
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -25,12 +25,9 @@ class MayoDataset(Dataset):
         x = Image.open(self.fname_list[idx]).convert('L')
         return self.transform(x)
 
-def eval(gt, noise_level, lambda_tv, P, max_iters, solver, K, device, GlobalResults, saveImage=False):
+def eval(gt, noise_level, lambda_tv, P, max_iters, solver, K, device, GlobalResults = None, saveImage=False):
     for n in noise_level:
         for lam in lambda_tv:
-
-            # Accumulatori temporanei per l'intero dataset per questo lambda
-            dataset_performances = { f'p_{str(p)}': {'psnr': 0.0, 'ssim': 0.0} for p in P }
 
             x_true = gt.to(device)
 
@@ -61,9 +58,6 @@ def eval(gt, noise_level, lambda_tv, P, max_iters, solver, K, device, GlobalResu
                         device=device
                     )
 
-                if saveImage and gt.shape[0] == 1:  # Salva solo se il batch ha una singola immagine
-                    save_image(normalize(x_sol), f"./TpVResult/SR_image_scale_{downscale_factor}_noise_{n}_lambda_{lam:e}_p_{p}.png")
-
                 psnr_val = PSNR(x_sol, x_true)
                 ssim_val = SSIM(x_sol, x_true)
 
@@ -72,14 +66,13 @@ def eval(gt, noise_level, lambda_tv, P, max_iters, solver, K, device, GlobalResu
                 if torch.is_tensor(ssim_val):
                     ssim_val = ssim_val.detach().item()
 
-                dataset_performances[p_str]['psnr'] += psnr_val
-                dataset_performances[p_str]['ssim'] += ssim_val
+                if saveImage and gt.shape[0] == 1:  # Salva solo se il batch ha una singola immagine
+                    save_image(normalize(x_sol), f"./TpVResult/SR_image_scale_{downscale_factor}_noise_{n}_lambda_{lam:e}_p_{p}_PSNR_{psnr_val:.2f}_SSIM_{ssim_val:.4f}.png")
 
-            for p in P:
-                p_str = f'p_{str(p)}'
-                GlobalResults[noise_key][lambda_key][p_str]['psnr'] = dataset_performances[p_str]['psnr']
-                GlobalResults[noise_key][lambda_key][p_str]['ssim'] = dataset_performances[p_str]['ssim']
-                print(f"p={p}, lambda={lam:e}, n={n} -> Mean PSNR: {GlobalResults[noise_key][lambda_key][p_str]['psnr']:.2f} dB | Mean SSIM: {GlobalResults[noise_key][lambda_key][p_str]['ssim']:.4f}")
+                if GlobalResults is not None:
+                    GlobalResults[noise_key][lambda_key][p_str]['psnr'] += psnr_val
+                    GlobalResults[noise_key][lambda_key][p_str]['ssim'] += ssim_val
+                    print(f"p={p}, lambda={lam:e}, n={n} -> Mean PSNR: {GlobalResults[noise_key][lambda_key][p_str]['psnr']:.2f} dB | Mean SSIM: {GlobalResults[noise_key][lambda_key][p_str]['ssim']:.4f}")
 
 # Set device
 device = utilities.get_device()
@@ -99,7 +92,8 @@ K = operators.DownScaling(
 )
 
 # Set up the solver parameters
-lambda_tv = [2e-3, 9e-2, 6e-2]
+lambda_tv = [1e-3, 9e-2, 8e-2] #Better for scale 4
+#lambda_tv = [5e-3, 9e-2, 4e-1] #Better for scale 2
 max_iters = 150
 P = [0.1, 0.4]
 noise_level = [0.005, 0.01]
@@ -108,7 +102,6 @@ solver = solvers.ChambollePockTpVUnconstrained(K)
 GlobalResults = {
     f"noise_{n}": {f'lambda_{lam:e}': { f'p_{str(p)}': {'psnr': 0.0, 'ssim': 0.0} for p in P} for lam in lambda_tv} for n in noise_level
 }
-GlobalResults['max_iteration'] = max_iters
 
 eval(gt=transforms.Resize((256, 256))(transforms.ToTensor()(Image.open('./0.png').convert('L'))).unsqueeze(0),
      noise_level=noise_level,
@@ -118,7 +111,6 @@ eval(gt=transforms.Resize((256, 256))(transforms.ToTensor()(Image.open('./0.png'
      solver=solver,
      K=K,
      device=device,
-     GlobalResults=GlobalResults,
      saveImage=True
 )
 
@@ -133,8 +125,31 @@ eval(gt=next(iter(test_loader)),
      GlobalResults=GlobalResults
 )
 
+# Prima di salvare i risultati, calcolo la media tra PSNR e SSIM e ordino i lambda per ogni livello di noise
+for noise_key, lambdas in list(GlobalResults.items()):
+
+    # Calcola media (psnr+ssim)/2 per ogni p e aggiungi campo 'avg'
+    for lambda_key, p_dict in lambdas.items():
+        lambda_avgs = []
+        for p_key, metrics in p_dict.items():
+            psnr = metrics.get('psnr', 0.0)
+            ssim = metrics.get('ssim', 0.0)
+            avg = (psnr + ssim) / 2.0
+            metrics['avg'] = avg
+            lambda_avgs.append(avg)
+
+        # media delle medie sui diversi p per questo lambda
+        lambda_mean = sum(lambda_avgs) / len(lambda_avgs) if lambda_avgs else 0.0
+        lambdas[lambda_key]['lambda_avg'] = lambda_mean
+
+    # Ordina i lambda in ordine decrescente secondo 'lambda_avg' e ricostruisce il dict (mantiene l'ordine)
+    sorted_items = sorted(lambdas.items(), key=lambda it: it[1].get('lambda_avg', 0.0), reverse=True)
+    GlobalResults[noise_key] = {k: v for k, v in sorted_items}
+
 print()
 print(f'✅ Global results => {json.dumps(GlobalResults, indent=2)}')
+
+GlobalResults['max_iteration'] = max_iters
 
 os.makedirs('./TpVResult', exist_ok=True)
 with open(f'./TpVResult/Results_scale_{downscale_factor}.json', 'w', encoding='utf-8') as f:

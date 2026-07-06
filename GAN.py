@@ -209,15 +209,11 @@ if(True):
             # Termine di fedeltà ai dati
             data_loss = torch.mean((K(x0_hat) - y_delta) ** 2) / (2 * sigma_y ** 2)
 
-            # Prior sullo spazio latente (incentiva z a rimanere Gaussiano)
-            prior_loss = lam * torch.mean(z ** 2)
-
             # Loss Totale
-            loss = guidance_scale * data_loss + prior_loss
+            loss = guidance_scale * data_loss
 
-            # Stampa di debug formattata meglio (senza sleep bloccanti)
-            if step % 10 == 0 or step == num_steps - 1:
-                print(f"Step {step:03d}/{num_steps} | Data Loss: {data_loss.item():.4f} | Prior Loss: {prior_loss.item():.4f} | Total Loss: {loss.item():.4f}", end='\r')
+            #if step % 10 == 0 or step == num_steps - 1:
+            #    print(f"Step {step:03d}/{num_steps} | Data Loss: {data_loss.item():.4f} | Total Loss: {loss.item():.4f}", end='\r')
 
             # Backpropagation e aggiornamento
             loss.backward()
@@ -253,10 +249,10 @@ if(True):
             y_delta, 
             K = k,
             latent_dim=128,
-            sigma_y=n, num_steps=2000, eta=1e-2, device=device
+            sigma_y=n, num_steps=iteration, eta=1e-2, device=device
         )
 
-        fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+        fig, axes = plt.subplots(1, 3, figsize=(12, 5))
 
         # 1. Immagine vera (ground truth), alta risoluzione
         axes[0].imshow(denorm(sample_image).cpu().squeeze(), cmap='gray')
@@ -265,7 +261,7 @@ if(True):
 
         # 2. Osservazione corrotta y_delta, bassa risoluzione
         axes[1].imshow(denorm(y_delta).cpu().squeeze(), cmap='gray')
-        axes[1].set_title(f'Osservazione $y^\\delta$\n({y_delta.shape[-2]}×{y_delta.shape[-1]}, rumore={n}, scale={downscale_factor})')
+        axes[1].set_title(f'PSNR={PSNR(x_gan_dps, sample_image):.2f} | SSIM={SSIM(x_gan_dps, sample_image):.4f} \n({y_delta.shape[-2]}×{y_delta.shape[-1]}, rumore={n}, scale={downscale_factor})')
         axes[1].axis('off')
 
         # 3. Ricostruzione GAN + DPS
@@ -279,8 +275,9 @@ if(True):
 
     # Esegui la valutazione su un betch del testset per la raccolta delle metriche globali
     for n in noise:
-        print(f"\n--- Valutazione Noise Level: {n} ---")
-        for x_true in x_test:
+        print(f"\n--- Valutazione Noise Level: {n} ---\n")
+        for i, x_true in enumerate(x_test):
+            print(f"🔄️ Processing sample {i+1}/{len(x_test)}", end='\r')
             x_true = x_true.unsqueeze(0)  # Aggiungi dimensione batch
             y_clean = k(x_true)
             y_delta = y_clean + n * torch.randn_like(y_clean)
