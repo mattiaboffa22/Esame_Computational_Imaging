@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from IPPy import operators, utilities
 from torch.cuda.amp import autocast, GradScaler
 from IPPy.utilities.metrics import PSNR, SSIM
+import numpy as np
 from IPPy.utilities import load_image, save_image, normalize
 
 
@@ -187,50 +188,78 @@ if(True):
     reloaded_G = reloaded_G.to(device)
     reloaded_G.eval()
 
-    def gan_dps_reconstruct(G, y_delta, K, latent_dim, device,
-                         sigma_y=0.01, num_steps=100, eta=1e-2,
-                         guidance_scale=1.0, lam=1e-3):
-        """
-        Inversione GAN guidata dai dati (ispirata alla logica DPS).
-        Ottimizza lo spazio latente Z di un generatore congelato per corrispondere a y_delta.
-        """
-        batch_size = y_delta.shape[0]
+    def gan_dps_reconstruct(
+    G,
+    y_delta,
+    K,
+    latent_dim,
+    device,
+    sigma_y=0.01,
+    num_steps=300,
+    sigma_start=0.5,
+    sigma_end=0.001,
+    step_size_scale=1.0,
+    guidance_scale=1.0,
+    seed=None):
+        
+        if seed is not None:
+            torch.manual_seed(seed)
+    
+        batch_size = y_delta.shape[0] # Sempre 1
 
-        # Inizializzazione dello stato latente
+        G.eval()
+
+        for p in G.parameters():
+            p.requires_grad_(False) # Disabilita il calcolo dei gradienti per i pesi del generatore durante la ricostruzione.
+    
+        # Stato latente iniziale
         z = torch.randn(batch_size, latent_dim, device=device, requires_grad=True)
-        optimizer = torch.optim.Adam([z], lr=eta)
-
-        for step in range(num_steps):
-            optimizer.zero_grad()  # Pulizia gradienti all'inizio dello step
-
-            # Generazione dell'immagine e clamping per stabilità coerente con i dati
-            x0_hat = G(z).clamp(-1.0, 1.0)
-
-            # Termine di fedeltà ai dati
-            data_loss = torch.mean((K(x0_hat) - y_delta) ** 2) / (2 * sigma_y ** 2)
-
-            # Loss Totale
+    
+        # Schedule geometrico di sigma_t (decrescente)
+        sigmas = torch.exp(
+            torch.linspace(np.log(sigma_start), np.log(sigma_end), num_steps, device=device)
+        ) # restituisce un tensore di dimensione (num_steps,) con valori decrescenti da sigma_start a sigma_end.
+    
+        for t in range(num_steps):
+            sigma_t = sigmas[t]
+    
+            # Step-size proporzionale a sigma_t^2
+            # dynamics classico: step piu' grandi quando sigma_t e' grande
+            # (esplorazione), piu' piccoli man mano che sigma_t -> sigma_end
+            step_size = step_size_scale * (sigma_t ** 2)
+    
+            if z.grad is not None:
+                z.grad.zero_()
+    
+            # Stima dell'immagine "pulita" corrente
+            x0_hat = G(z).clamp(0.0, 1.0)
+    
+            # Termine di data-fidelity (guidance): gradiente rispetto a z
+            # tramite backprop attraverso G e l'operatore di degradazione K.
+            data_loss = torch.sum((K(x0_hat) - y_delta) ** 2) / (2.0 * sigma_y ** 2)
             loss = guidance_scale * data_loss
-
-            #if step % 10 == 0 or step == num_steps - 1:
-            #    print(f"Step {step:03d}/{num_steps} | Data Loss: {data_loss.item():.4f} | Total Loss: {loss.item():.4f}", end='\r')
-
-            # Backpropagation e aggiornamento
             loss.backward()
-            optimizer.step()
-
-        # Output finale congelato
+    
+            with torch.no_grad():
+                noise = torch.randn_like(z) if t < num_steps - 1 else torch.zeros_like(z)
+                # calcolo il rumore solo se non sono all'ultimo step, altrimenti lo azzero
+                z = z - step_size * z.grad + torch.sqrt(2.0 * step_size) * noise
+                # torch.sqrt(2.0 * step_size) * noise componente stocastica
+                z.requires_grad_(True)
+    
         with torch.no_grad():
-            return G(z).clamp(-1.0, 1.0).detach()
+            x_final = G(z).clamp(0.0, 1.0)
+    
+        return x_final.detach()
 
     def denorm(x):
         return (x.clamp(-1.0, 1.0) + 1.0) / 2.0
     
-    downscale_factor = 2
+    downscale_factor = 4
     k = operators.DownScaling(img_shape=(256,256), downscale_factor=downscale_factor)
     noise = [0.005, 0.01]
     x_test = next(iter(test_loader)).to(device)
-    iteration = 1000
+    iteration = 500
 
     GlobalResults = {
         noise_level: {'psnr': 0.0, 'ssim': 0.0} for noise_level in noise
@@ -249,7 +278,7 @@ if(True):
             y_delta, 
             K = k,
             latent_dim=128,
-            sigma_y=n, num_steps=iteration, eta=1e-2, device=device
+            sigma_y=n, num_steps=iteration, device=device
         )
 
         fig, axes = plt.subplots(1, 3, figsize=(12, 5))
@@ -287,7 +316,7 @@ if(True):
                 y_delta, 
                 K=k,
                 latent_dim=latent_dim,
-                sigma_y=n, num_steps=iteration, eta=1e-2, device=device
+                sigma_y=n, num_steps=iteration, device=device
             )
 
             GlobalResults[n]['psnr'] += PSNR(x_gan_dps, x_true)
