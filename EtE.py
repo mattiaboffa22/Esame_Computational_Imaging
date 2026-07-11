@@ -20,6 +20,7 @@ from sklearn.model_selection import train_test_split
 #        rc = self.relu(self.residualConnection(fc))
 #        return self.lastLayer(rc + x)
 
+#Eseguiamo due convoluzioni consecutive da 3x3, tra le due convoluzioni: funzione ReLu per introdurre non-linearità
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DoubleConv, self).__init__()
@@ -32,6 +33,7 @@ class DoubleConv(nn.Module):
     def forward(self, x):
         return self.double_conv(x)
     
+#Encoder: prima riduciamo a metà altezza e larghezza con MaxPool2d con kernel 2x2 e poi richiamiamo DoubleConv per una risoluzione inferiore ma più canali    
 class downsample(nn.Module):
     """ In questo scenario, prima eseguiamo il downsampling, quindi applichiamo la riduzione della 
     dimensione spaziale dell'immagine utilizzando un'operazione di pooling (in questo caso, MaxPool2d)
@@ -45,7 +47,8 @@ class downsample(nn.Module):
 
     def forward(self, x):
         return self.down(x)
-    
+
+#Encoder, non utilizziamo questa classe in quando utilizziamo AttentionGate     
 class upsample(nn.Module):
     def __init__(self, in_channels, out_channels, skip_channels):
         super(upsample, self).__init__()
@@ -64,7 +67,12 @@ class upsample(nn.Module):
             0       1       2        3
         """
         return self.conv(x)
-    
+
+#AttentioGate: invece di concatenare le feature dell'encoder con quelle del decoder, attentio agte fa una selezione intelligente
+# 1. prende il livello inferiore in input, lo ingrandisce con pixelshuffle e lo filtra
+# 2. filtra quello che arriva direttamente dall'encoder tramite skip connection
+# 3. somma i due e applica una ReLu e una conv 1x1 seguita da una sigmoide per generare una mpppa di attenzione (i valori sono tra 0 e 1)
+# 4. moltiplica la mappa per le feature originali dell'encoder, in modo che la rete "decide" su quali zone focalizzarsi prima di passare tutto al DoubleConv    
 class AttentionGate(nn.Module):
     def __init__(self, x_channels, skip_channels, inter_channels):
         super().__init__()
@@ -97,6 +105,8 @@ class AttentionGate(nn.Module):
 
         return self.double_conv(original_skipp * AttentionMask)
  
+# Unisce tutti i pezzi seguendo la classica struttura a "U". La rete predice il rumore
+# Sottraendo il rumore predetto dall'immagine di input x, si ottinee l'immagine finale restaurata
 class UNet(nn.Module):
     def __init__(self, in_channels=1, out_channels=1, features=[64, 128, 256, 512]):
         super(UNet, self).__init__()
